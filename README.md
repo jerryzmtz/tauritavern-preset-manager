@@ -1,3 +1,45 @@
+# TauriTavern 预设缝合管理器
+
+一个面向 TauriTavern / SillyTavern 预设作者的 PromptManager 条目搬运工具。它提供双栏预设工作台：左侧选择来源预设，右侧选择目标预设，可以搜索、过滤、复制、收藏、重排、启用/停用和预览条目；所有修改都会先停留在目标草稿里，只有点击“保存目标预设”才会写回目标 OpenAI 预设。
+
+## 导入脚本
+
+仓库发布后，可以在酒馆助手脚本导入下面这个文件：
+
+- [酒馆助手脚本-预设缝合管理器.json](酒馆助手脚本-预设缝合管理器.json)
+
+脚本会自动从 jsDelivr 加载最新 tag；如果仓库还没有 tag，会回退到 `main`：
+
+```javascript
+import(`https://testingcf.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@${version}/dist/preset-manager/index.js`);
+```
+
+本地开发时可以运行：
+
+```bash
+pnpm install
+pnpm build
+pnpm install:tauritavern
+```
+
+验证命令：
+
+```bash
+pnpm verify:preset-data
+pnpm verify:preset-ui
+```
+
+## 设计约束
+
+- 产品基准见 [PRODUCT.md](PRODUCT.md)。
+- UI/UX 基准见 [DESIGN.md](DESIGN.md)。
+- 颜色和面板优先跟随 TauriTavern / SillyTavern 宿主主题变量，不建立独立调色板。
+- PC 使用双栏工作台；移动端使用全屏面板和“来源 / 目标 / 收藏 / 预览”分段标签。
+
+## 模板说明
+
+本项目基于 `tavern_helper_template` 改造，下面保留模板原始说明，便于继续使用模板提供的构建和自动更新工作流。
+
 # tavern_helper_template
 
 酒馆助手编写前端界面或脚本的模板.

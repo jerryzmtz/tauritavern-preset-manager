@@ -7,7 +7,10 @@
     "lint": "eslint",
     "lint:fix": "eslint --fix",
     "dump": "node dump_schema.ts",
-    "sync": "node tavern_sync.mjs"
+    "sync": "node tavern_sync.mjs",
+    "verify:preset-data": "node tools/verify-preset-manager-data.mjs",
+    "verify:preset-ui": "node tools/verify-preset-manager-ui.mjs",
+    "install:tauritavern": "node tools/install-to-tauritavern.mjs"
   },
   "browserslist": [
     "defaults and partially supports es6-module"
@@ -44,6 +47,7 @@
     "html-webpack-plugin": "^5.6.7",
     "javascript-obfuscator": "^4.2.2",
     "mini-css-extract-plugin": "^2.10.2",
+    "playwright-core": "^1.60.0",
     "postcss": "^8.5.15",
     "postcss-cli": "^11.0.1",
     "postcss-load-config": "^6.0.1",

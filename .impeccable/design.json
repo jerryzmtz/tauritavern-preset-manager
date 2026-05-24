@@ -1,0 +1,142 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-05-24T00:00:00.000Z",
+  "title": "Design System: TauriTavern Preset Stitcher",
+  "extensions": {
+    "colorMeta": {
+      "theme-text": {
+        "role": "neutral",
+        "displayName": "Theme Text",
+        "canonical": "var(--SmartThemeBodyColor)",
+        "tonalRamp": [
+          "var(--SmartThemeBodyColor)"
+        ]
+      },
+      "theme-surface": {
+        "role": "neutral",
+        "displayName": "Theme Surface",
+        "canonical": "var(--SmartThemeBlurTintColor)",
+        "tonalRamp": [
+          "var(--SmartThemeBlurTintColor)"
+        ]
+      },
+      "theme-border": {
+        "role": "neutral",
+        "displayName": "Theme Border",
+        "canonical": "var(--SmartThemeBorderColor)",
+        "tonalRamp": [
+          "var(--SmartThemeBorderColor)"
+        ]
+      },
+      "theme-accent": {
+        "role": "primary",
+        "displayName": "Theme Accent",
+        "canonical": "var(--SmartThemeQuoteColor)",
+        "tonalRamp": [
+          "var(--SmartThemeQuoteColor)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "body": {
+        "displayName": "Native UI Body",
+        "purpose": "Dense controls and rows."
+      },
+      "title": {
+        "displayName": "Pane Title",
+        "purpose": "Panel and pane headings only."
+      },
+      "label": {
+        "displayName": "Quiet Metadata",
+        "purpose": "Field labels, row metadata, counts, and status."
+      }
+    },
+    "shadows": [
+      {
+        "name": "panel-shadow",
+        "value": "0 18px 48px color-mix(in srgb, var(--SmartThemeShadowColor) 42%, transparent)",
+        "purpose": "Separates the full workbench from the tavern UI."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state-transition",
+        "value": "170ms ease-out",
+        "purpose": "Hover, focus, active, and selection feedback only."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "desktop",
+        "value": "1121px"
+      },
+      {
+        "name": "tablet",
+        "value": "768px-1120px"
+      },
+      {
+        "name": "mobile",
+        "value": "767px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Save Button",
+      "kind": "button",
+      "refersTo": "button-neutral",
+      "description": "Accent-tinted save action that only appears enabled when the target draft is dirty.",
+      "html": "<button class=\"ds-pm-button ds-pm-button-primary\">保存目标预设</button>",
+      "css": ".ds-pm-button{height:36px;padding:0 12px;border:1px solid var(--SmartThemeBorderColor);border-radius:8px;color:var(--SmartThemeBodyColor);background:color-mix(in srgb,var(--SmartThemeBlurTintColor) 88%,transparent);font:14px/1.45 -apple-system,BlinkMacSystemFont,\"Segoe UI\",system-ui,sans-serif}.ds-pm-button-primary{border-color:var(--SmartThemeQuoteColor);background:color-mix(in srgb,var(--SmartThemeQuoteColor) 14%,var(--SmartThemeBlurTintColor) 86%)}.ds-pm-button:hover,.ds-pm-button:focus-visible{outline:none;border-color:var(--SmartThemeQuoteColor)}"
+    },
+    {
+      "name": "Prompt Row",
+      "kind": "custom",
+      "refersTo": "row-entry",
+      "description": "Dense selectable prompt entry with role, enabled state, content length, and icon actions.",
+      "html": "<div class=\"ds-pm-row\"><span class=\"ds-pm-grip\">☰</span><div><strong>📔小说</strong><small>system · 启用 · 2081 字</small></div></div>",
+      "css": ".ds-pm-row{display:grid;grid-template-columns:24px minmax(0,1fr);gap:8px;align-items:center;min-height:54px;padding:7px 8px;border:1px solid color-mix(in srgb,var(--SmartThemeBorderColor) 62%,transparent);border-radius:8px;color:var(--SmartThemeBodyColor);background:color-mix(in srgb,var(--SmartThemeBlurTintColor) 62%,transparent);font:14px/1.45 -apple-system,BlinkMacSystemFont,\"Segoe UI\",system-ui,sans-serif}.ds-pm-row:hover,.ds-pm-row:focus-visible{border-color:var(--SmartThemeQuoteColor);background:color-mix(in srgb,var(--SmartThemeQuoteColor) 10%,var(--SmartThemeBlurTintColor) 90%)}.ds-pm-row strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ds-pm-row small{display:block;color:color-mix(in srgb,var(--SmartThemeBodyColor) 62%,transparent)}.ds-pm-grip{color:color-mix(in srgb,var(--SmartThemeBodyColor) 38%,transparent)}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Borrowed Tavern Furniture",
+    "overview": "This interface must feel like a practical piece of TauriTavern furniture placed in the existing room. It is dense, quiet, and immediate.",
+    "keyCharacteristics": [
+      "Host-themed surfaces, borders, text, and accent states.",
+      "Compact list rows built for scanning prompt names, roles, enabled state, and content length.",
+      "Desktop side-by-side comparison; mobile tabbed full-screen workbench with button fallbacks.",
+      "Explicit save state, visible dirty state, and no hidden writes."
+    ],
+    "rules": [
+      {
+        "name": "The Borrowed Color Rule",
+        "body": "Every visible color must come from SmartTheme variables, currentColor, or a semantic danger/warning fallback mixed with --SmartThemeBodyColor.",
+        "section": "colors"
+      },
+      {
+        "name": "The Accent Rarity Rule",
+        "body": "The accent is reserved for selected, focused, dirty, or primary-save states.",
+        "section": "colors"
+      },
+      {
+        "name": "The No Display Rule",
+        "body": "Do not use display fonts, fluid hero type, or viewport-scaled font sizes.",
+        "section": "typography"
+      }
+    ],
+    "dos": [
+      "Do use SmartTheme variables for text, surface, border, accent, blur, and shadow.",
+      "Do keep source and target entries visible at the same time on desktop.",
+      "Do provide explicit copy, favorite, insert, move, toggle, remove, reset, and save buttons.",
+      "Do use TauriTavern layout-kit.js or the hard data-tt-mobile-surface ABI for full-screen mobile behavior.",
+      "Do test Chinese DOM text after rendering; evidence with ?? or mojibake is invalid."
+    ],
+    "donts": [
+      "Don't introduce a standalone palette, purple-blue gradients, decorative glow, or glassmorphism as decoration.",
+      "Don't build a hero page, landing page, nested card layout, or explanatory marketing surface.",
+      "Don't rely on drag-and-drop as the only operation path.",
+      "Don't write to a preset before the user clicks the explicit save button.",
+      "Don't rewrite, normalize, or trim prompt content while moving entries."
+    ]
+  }
+}

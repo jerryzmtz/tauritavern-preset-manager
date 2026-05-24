@@ -11,3 +11,8 @@ pnpm-debug.log*
 
 auto-imports.d.ts
 components.d.ts
+
+dist/preset-manager/*.map
+dist/前端界面示例/
+dist/流式楼层界面示例/
+dist/脚本示例/
