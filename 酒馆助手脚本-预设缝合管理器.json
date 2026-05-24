@@ -3,16 +3,11 @@
   "enabled": true,
   "name": "预设缝合管理器",
   "id": "9e64ac82-1c7f-4f2d-9eb7-24d043b45f68",
-  "content": "import * as presetStitcherScriptModule from '/script.js';\nimport * as presetStitcherOpenAiModule from '/scripts/openai.js';\n\nlet presetStitcherLayoutKit = {};\ntry {\n  presetStitcherLayoutKit = await import('/scripts/tauritavern/layout-kit.js');\n} catch {}\n\nwindow.__TT_PRESET_STITCHER_RUNTIME__ = {\n  scriptModule: presetStitcherScriptModule,\n  openAiModule: presetStitcherOpenAiModule,\n  layoutKit: presetStitcherLayoutKit,\n};\n\nawait import('https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v0.1.9/dist/preset-manager/index.js');",
+  "content": "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v0.1.10/dist/preset-manager/index.js';",
   "info": "TauriTavern / SillyTavern OpenAI 预设 PromptManager 条目缝合工具。支持双栏复制、收藏、重排、预览和保存前草稿。",
   "button": {
-    "enabled": true,
-    "buttons": [
-      {
-        "name": "预设缝合",
-        "visible": true
-      }
-    ]
+    "enabled": false,
+    "buttons": []
   },
   "data": {},
   "export_with": {

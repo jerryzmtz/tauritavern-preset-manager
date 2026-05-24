@@ -1,3 +1,27 @@
+.pm-launcher {
+  position: fixed;
+  right: max(12px, var(--tt-inset-right, 0px));
+  bottom: max(12px, var(--tt-viewport-bottom-inset, var(--tt-inset-bottom, 0px)));
+  z-index: 2999;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 12px;
+  color: var(--SmartThemeBodyColor, #e7e1d0);
+  background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #102021) 88%, transparent);
+  border: 1px solid var(--SmartThemeBorderColor, #7c8170);
+  border-radius: 8px;
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--SmartThemeShadowColor, #141713) 32%, transparent);
+  backdrop-filter: blur(var(--SmartThemeBlurStrength, 12px));
+  -webkit-backdrop-filter: blur(var(--SmartThemeBlurStrength, 12px));
+}
+
+.pm-launcher:hover,
+.pm-launcher:focus-visible {
+  background: color-mix(in srgb, var(--SmartThemeQuoteColor, #b9c49a) 16%, var(--SmartThemeBlurTintColor, #102021) 84%);
+}
+
 #tt-preset-stitcher-root {
   --pm-text: var(--SmartThemeBodyColor, #e7e1d0);
   --pm-muted: color-mix(in srgb, var(--SmartThemeBodyColor, #e7e1d0) 62%, transparent);
@@ -458,6 +482,10 @@
 }
 
 @media (max-width: 767px) {
+  .pm-launcher span {
+    display: none;
+  }
+
   .pm-panel {
     inset:
       var(--tt-inset-top, 0px)

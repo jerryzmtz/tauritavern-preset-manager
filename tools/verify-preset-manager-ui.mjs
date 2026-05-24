@@ -94,32 +94,8 @@ for (let index = 0; index < 18; index += 1) {
   fixturePresets[1].preset.prompt_order[0].order.push({ identifier: targetId, enabled: index % 2 !== 0 });
 }
 
-function listen(server) {
-  return new Promise(resolve => {
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      if (typeof address === 'object' && address) {
-        resolve(`http://127.0.0.1:${address.port}`);
-      }
-    });
-  });
-}
-
-async function serveFixture() {
+function serveFixture() {
   let savedPreset = null;
-  const cdnServer = createServer(async (request, response) => {
-    const url = new URL(request.url ?? '/', 'http://127.0.0.1');
-    response.setHeader('Access-Control-Allow-Origin', '*');
-    if (url.pathname === '/dist/preset-manager/index.js') {
-      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' });
-      response.end(await readFile(bundlePath, 'utf8'));
-      return;
-    }
-    response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-    response.end('cdn not found');
-  });
-  const cdnUrl = await listen(cdnServer);
-
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
     response.setHeader('Access-Control-Allow-Origin', '*');
@@ -158,53 +134,16 @@ async function serveFixture() {
   </style>
 </head>
 <body>
-  <main>
-    <p>中文测试：预设缝合管理器</p>
-    <div id="script-buttons" aria-label="酒馆助手按钮区域"></div>
-  </main>
-  <script>
-    window.__pmButtonHandlers = new Map();
-    window.$ = callback => callback();
-    window.getButtonEvent = name => name;
-    window.eventOn = (eventName, handler) => {
-      window.__pmButtonHandlers.set(eventName, handler);
-    };
-    window.replaceScriptButtons = buttons => {
-      const mount = document.getElementById('script-buttons');
-      mount.textContent = '';
-      for (const button of buttons) {
-        if (!button.visible) {
-          continue;
-        }
-        const element = document.createElement('button');
-        element.type = 'button';
-        element.setAttribute('aria-label', '酒馆助手按钮：' + button.name);
-        element.textContent = button.name;
-        element.addEventListener('click', () => window.__pmButtonHandlers.get(button.name)?.());
-        mount.appendChild(element);
-      }
-    };
-  </script>
-  <script type="module" src="/script-entry.js?run=1"></script>
-  <script type="module" src="/script-entry.js?run=2"></script>
+  <main>中文测试：预设缝合管理器</main>
+  <script type="module" src="/dist/preset-manager/index.js"></script>
 </body>
 </html>`);
       return;
     }
 
-    if (url.pathname === '/script-entry.js') {
+    if (url.pathname === '/dist/preset-manager/index.js') {
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' });
-      response.end(`import * as presetStitcherScriptModule from '/script.js';
-import * as presetStitcherOpenAiModule from '/scripts/openai.js';
-import * as presetStitcherLayoutKit from '/scripts/tauritavern/layout-kit.js';
-
-window.__TT_PRESET_STITCHER_RUNTIME__ = {
-  scriptModule: presetStitcherScriptModule,
-  openAiModule: presetStitcherOpenAiModule,
-  layoutKit: presetStitcherLayoutKit,
-};
-
-await import('${cdnUrl}/dist/preset-manager/index.js');`);
+      response.end(await readFile(bundlePath, 'utf8'));
       return;
     }
 
@@ -245,27 +184,14 @@ export function applySurface(element, surface){ element.dataset.ttMobileSurface 
     response.end('not found');
   });
 
-  const appUrl = await listen(server);
-  return {
-    server: {
-      close() {
-        server.close();
-        cdnServer.close();
-      },
-    },
-    url: appUrl,
-    cdnUrl,
-    getSavedPreset: () => savedPreset,
-  };
-}
-
-async function openManagerFromHelperButton(page) {
-  await page.getByRole('button', { name: /酒馆助手按钮：预设缝合/ }).click();
-  await page.locator('.pm-panel').waitFor({ state: 'visible' });
-  const launcherCount = await page.locator('.pm-launcher').count();
-  if (launcherCount !== 0) {
-    throw new Error('不应创建右下角浮动入口');
-  }
+  return new Promise(resolve => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (typeof address === 'object' && address) {
+        resolve({ server, url: `http://127.0.0.1:${address.port}`, getSavedPreset: () => savedPreset });
+      }
+    });
+  });
 }
 
 async function dragBetween(page, sourceLocator, targetLocator, placement = 'center') {
@@ -331,7 +257,8 @@ async function verifyDirectDragAndUnsavedClose(page, fixture, viewportName) {
     void dialog.accept();
   });
   await page.getByTitle('关闭').click();
-  await openManagerFromHelperButton(page);
+  await page.getByRole('button', { name: /打开预设缝合管理器/ }).click();
+  await page.locator('.pm-panel').waitFor({ state: 'visible' });
 
   const reopenedTitles = await targetTitles.evaluateAll(nodes => nodes.slice(0, 3).map(node => node.textContent?.trim()));
   if (reopenedTitles[0] !== originalTitles[0] || reopenedTitles[1] !== originalTitles[1]) {
@@ -369,7 +296,8 @@ try {
   for (const viewport of viewports) {
     const page = await browser.newPage({ viewport: { width: viewport.width, height: viewport.height } });
     await page.goto(fixture.url);
-    await openManagerFromHelperButton(page);
+    await page.getByRole('button', { name: /打开预设缝合管理器/ }).click();
+    await page.locator('.pm-panel').waitFor({ state: 'visible' });
 
     const bodyText = await page.locator('body').innerText();
     if (!bodyText.includes('预设缝合管理器') || bodyText.includes('????')) {

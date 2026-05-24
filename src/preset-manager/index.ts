@@ -19,8 +19,7 @@ const EXTENSION_NAMESPACE = 'preset-manager';
 const FAVORITES_TABLE = 'favorites';
 const FAVORITES_KEY = 'v1';
 const ROOT_ID = 'tt-preset-stitcher-root';
-const OPEN_API_KEY = '__TT_PRESET_STITCHER_OPEN__';
-const HELPER_BUTTON_NAME = '预设缝合';
+const LAUNCHER_ID = 'tt-preset-stitcher-launcher';
 
 type MobileTab = 'source' | 'target' | 'favorites' | 'preview';
 type EntryKind = 'source' | 'target' | 'favorite';
@@ -61,6 +60,11 @@ interface TauriTavernApi {
   };
 }
 
+interface TauriWindow extends Window {
+  __TAURITAVERN__?: TauriTavernApi;
+  __TAURITAVERN_MAIN_READY__?: Promise<void>;
+}
+
 interface ScriptModule {
   getRequestHeaders?: () => Record<string, string>;
 }
@@ -71,25 +75,6 @@ interface OpenAiModule {
   oai_settings?: {
     preset_settings_openai?: string;
   };
-}
-
-type LayoutKit = {
-  waitForHostReady?: () => Promise<void>;
-  SURFACE?: Record<string, string>;
-  applySurface?: (element: Element, surface: string) => void;
-};
-
-interface PresetStitcherRuntime {
-  scriptModule?: ScriptModule;
-  openAiModule?: OpenAiModule;
-  layoutKit?: LayoutKit;
-}
-
-interface TauriWindow extends Window {
-  __TAURITAVERN__?: TauriTavernApi;
-  __TAURITAVERN_MAIN_READY__?: Promise<void>;
-  __TT_PRESET_STITCHER_OPEN__?: () => void;
-  __TT_PRESET_STITCHER_RUNTIME__?: PresetStitcherRuntime;
 }
 
 interface AppState {
@@ -144,71 +129,59 @@ const state: AppState = {
 
 let scriptModule: ScriptModule = {};
 let openAiModule: OpenAiModule = {};
-let layoutKit: LayoutKit = {};
+let layoutKit: { waitForHostReady?: () => Promise<void>; SURFACE?: Record<string, string>; applySurface?: (element: Element, surface: string) => void } = {};
 let isComposingInput = false;
 let pointerDrag: PointerDragState | null = null;
 let suppressNextClick = false;
 
-const bootPromise = boot();
-exposeManagerApi();
-registerHelperButton();
+void boot();
 
 async function boot(): Promise<void> {
   await waitForHost();
   await loadRuntimeModules();
   state.favorites = await loadFavorites();
+  createLauncher();
   state.ready = true;
-}
-
-function exposeManagerApi(): void {
-  (window as TauriWindow)[OPEN_API_KEY] = () => {
-    void openManagerFromScript();
-  };
-}
-
-function registerHelperButton(): void {
-  $(() => {
-    replaceScriptButtons([{ name: HELPER_BUTTON_NAME, visible: true }]);
-    eventOn(getButtonEvent(HELPER_BUTTON_NAME), () => {
-      void openManagerFromScript();
-    });
-  });
-}
-
-async function openManagerFromScript(): Promise<void> {
-  await bootPromise;
-  await openManager();
 }
 
 async function waitForHost(): Promise<void> {
   const tauriWindow = window as TauriWindow;
-  const runtimeLayoutKit = tauriWindow.__TT_PRESET_STITCHER_RUNTIME__?.layoutKit;
-  if (runtimeLayoutKit) {
-    layoutKit = runtimeLayoutKit;
+  try {
+    layoutKit = await import(/* webpackIgnore: true */ '/scripts/tauritavern/layout-kit.js') as typeof layoutKit;
     await layoutKit.waitForHostReady?.();
-    return;
+  } catch {
+    await (tauriWindow.__TAURITAVERN__?.ready ?? tauriWindow.__TAURITAVERN_MAIN_READY__ ?? Promise.resolve());
   }
-
-  await (tauriWindow.__TAURITAVERN__?.ready ?? tauriWindow.__TAURITAVERN_MAIN_READY__ ?? Promise.resolve());
 }
 
 async function loadRuntimeModules(): Promise<void> {
-  const runtime = (window as TauriWindow).__TT_PRESET_STITCHER_RUNTIME__;
-  if (!runtime?.scriptModule || !runtime?.openAiModule) {
-    throw new Error('预设缝合管理器缺少酒馆助手本地模块，请使用 v0.1.9 导入脚本。');
+  scriptModule = await import(/* webpackIgnore: true */ '/script.js') as ScriptModule;
+  openAiModule = await import(/* webpackIgnore: true */ '/scripts/openai.js') as OpenAiModule;
+}
+
+function createLauncher(): void {
+  if (document.getElementById(LAUNCHER_ID)) {
+    return;
   }
 
-  scriptModule = runtime.scriptModule;
-  openAiModule = runtime.openAiModule;
+  const button = document.createElement('button');
+  button.id = LAUNCHER_ID;
+  button.className = 'pm-launcher menu_button';
+  button.type = 'button';
+  button.title = '打开预设缝合管理器';
+  button.setAttribute('aria-label', '打开预设缝合管理器');
+  button.innerHTML = '<i class="fa-solid fa-layer-group" aria-hidden="true"></i><span>预设缝合</span>';
+  button.addEventListener('click', () => {
+    void openManager();
+  });
+  document.body.appendChild(button);
 }
 
 async function openManager(): Promise<void> {
   clearMessage();
-  if (!state.isOpen) {
-    state.targetDraft = null;
-    state.targetOriginal = null;
-    state.dirty = false;
-  }
+  state.targetDraft = null;
+  state.targetOriginal = null;
+  state.dirty = false;
   hydratePresetList();
   state.isOpen = true;
   render();
