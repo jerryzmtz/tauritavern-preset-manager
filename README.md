@@ -8,7 +8,7 @@
 
 - [酒馆助手脚本-预设缝合管理器.json](酒馆助手脚本-预设缝合管理器.json)
 
-脚本会自动从 jsDelivr 加载最新 tag；如果仓库还没有 tag，会回退到 `main`：
+脚本会自动从 jsDelivr 加载最新 tag；如果仓库还没有 tag，会回退到 `main`。入口使用酒馆助手脚本自带的“预设缝合”按钮，不会在页面右下角额外创建浮动按钮：
 
 ```javascript
 import(`https://testingcf.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@${version}/dist/preset-manager/index.js`);

@@ -134,7 +134,32 @@ function serveFixture() {
   </style>
 </head>
 <body>
-  <main>中文测试：预设缝合管理器</main>
+  <main>
+    <p>中文测试：预设缝合管理器</p>
+    <div id="script-buttons" aria-label="酒馆助手按钮区域"></div>
+  </main>
+  <script>
+    window.__pmButtonHandlers = new Map();
+    window.getButtonEvent = name => name;
+    window.eventOn = (eventName, handler) => {
+      window.__pmButtonHandlers.set(eventName, handler);
+    };
+    window.replaceScriptButtons = buttons => {
+      const mount = document.getElementById('script-buttons');
+      mount.textContent = '';
+      for (const button of buttons) {
+        if (!button.visible) {
+          continue;
+        }
+        const element = document.createElement('button');
+        element.type = 'button';
+        element.setAttribute('aria-label', '酒馆助手按钮：' + button.name);
+        element.textContent = button.name;
+        element.addEventListener('click', () => window.__pmButtonHandlers.get(button.name)?.());
+        mount.appendChild(element);
+      }
+    };
+  </script>
   <script type="module" src="/dist/preset-manager/index.js"></script>
 </body>
 </html>`);
@@ -192,6 +217,15 @@ export function applySurface(element, surface){ element.dataset.ttMobileSurface 
       }
     });
   });
+}
+
+async function openManagerFromHelperButton(page) {
+  await page.getByRole('button', { name: /酒馆助手按钮：预设缝合/ }).click();
+  await page.locator('.pm-panel').waitFor({ state: 'visible' });
+  const launcherCount = await page.locator('.pm-launcher').count();
+  if (launcherCount !== 0) {
+    throw new Error('不应创建右下角浮动入口');
+  }
 }
 
 async function dragBetween(page, sourceLocator, targetLocator, placement = 'center') {
@@ -257,8 +291,7 @@ async function verifyDirectDragAndUnsavedClose(page, fixture, viewportName) {
     void dialog.accept();
   });
   await page.getByTitle('关闭').click();
-  await page.getByRole('button', { name: /打开预设缝合管理器/ }).click();
-  await page.locator('.pm-panel').waitFor({ state: 'visible' });
+  await openManagerFromHelperButton(page);
 
   const reopenedTitles = await targetTitles.evaluateAll(nodes => nodes.slice(0, 3).map(node => node.textContent?.trim()));
   if (reopenedTitles[0] !== originalTitles[0] || reopenedTitles[1] !== originalTitles[1]) {
@@ -296,8 +329,7 @@ try {
   for (const viewport of viewports) {
     const page = await browser.newPage({ viewport: { width: viewport.width, height: viewport.height } });
     await page.goto(fixture.url);
-    await page.getByRole('button', { name: /打开预设缝合管理器/ }).click();
-    await page.locator('.pm-panel').waitFor({ state: 'visible' });
+    await openManagerFromHelperButton(page);
 
     const bodyText = await page.locator('body').innerText();
     if (!bodyText.includes('预设缝合管理器') || bodyText.includes('????')) {

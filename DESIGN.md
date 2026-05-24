@@ -105,7 +105,7 @@ Depth is conveyed through the host blur tint, border contrast, and one structura
 
 ### Shadow Vocabulary
 - **Panel Shadow** (`0 18px 48px color-mix(in srgb, var(--SmartThemeShadowColor) 42%, transparent)`): the main workbench floating above the tavern UI.
-- **Launcher Shadow** (`0 8px 22px color-mix(in srgb, var(--SmartThemeShadowColor) 32%, transparent)`): the compact entry button.
+- **Host Button Entry**: the extension does not create its own floating launcher. The entry point lives in the Tavern Helper script button area and opens the workbench through the script button event.
 
 ### Named Rules
 **The Flat Rows Rule.** List rows do not get decorative shadows. Selection uses border and tonal background shifts.
