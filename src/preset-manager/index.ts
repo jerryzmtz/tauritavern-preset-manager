@@ -20,7 +20,6 @@ const FAVORITES_TABLE = 'favorites';
 const FAVORITES_KEY = 'v1';
 const ROOT_ID = 'tt-preset-stitcher-root';
 const OPEN_API_KEY = '__TT_PRESET_STITCHER_OPEN__';
-const HELPER_BUTTON_NAME = '预设缝合';
 
 type MobileTab = 'source' | 'target' | 'favorites' | 'preview';
 type EntryKind = 'source' | 'target' | 'favorite';
@@ -65,12 +64,6 @@ interface TauriWindow extends Window {
   __TAURITAVERN__?: TauriTavernApi;
   __TAURITAVERN_MAIN_READY__?: Promise<void>;
   __TT_PRESET_STITCHER_OPEN__?: () => void;
-}
-
-interface TavernHelperWindow extends TauriWindow {
-  replaceScriptButtons?: (buttons: Array<{ name: string; visible: boolean }>) => void;
-  getButtonEvent?: (name: string) => unknown;
-  eventOn?: (event: unknown, handler: () => void) => void;
 }
 
 interface ScriptModule {
@@ -141,11 +134,9 @@ let layoutKit: { waitForHostReady?: () => Promise<void>; SURFACE?: Record<string
 let isComposingInput = false;
 let pointerDrag: PointerDragState | null = null;
 let suppressNextClick = false;
-let helperButtonRegistered = false;
 
 const bootPromise = boot();
 exposeManagerApi();
-registerHelperButtonEntry();
 
 async function boot(): Promise<void> {
   await waitForHost();
@@ -158,32 +149,6 @@ function exposeManagerApi(): void {
   (window as TauriWindow)[OPEN_API_KEY] = () => {
     void openManagerFromScript();
   };
-}
-
-function registerHelperButtonEntry(): void {
-  if (helperButtonRegistered) {
-    return;
-  }
-
-  const register = () => {
-    const helperWindow = window as TavernHelperWindow;
-    helperWindow.replaceScriptButtons?.([{ name: HELPER_BUTTON_NAME, visible: true }]);
-
-    if (!helperWindow.eventOn || !helperWindow.getButtonEvent) {
-      return;
-    }
-
-    helperWindow.eventOn(helperWindow.getButtonEvent(HELPER_BUTTON_NAME), () => {
-      void openManagerFromScript();
-    });
-    helperButtonRegistered = true;
-  };
-
-  if (typeof $ === 'function') {
-    $(() => register());
-  } else {
-    register();
-  }
 }
 
 async function openManagerFromScript(): Promise<void> {
