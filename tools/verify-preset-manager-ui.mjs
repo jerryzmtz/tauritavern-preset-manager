@@ -341,7 +341,7 @@ try {
       throw new Error(`${viewport.name}: 面板超出视口`);
     }
 
-    const saveButton = page.getByRole('button', { name: /保存目标预设/ });
+    const saveButton = page.getByRole('button', { name: /保存预设/ });
     await saveButton.scrollIntoViewIfNeeded();
     const saveBox = await saveButton.boundingBox();
     if (!saveBox || saveBox.x < 0 || saveBox.y < 0 || saveBox.x + saveBox.width > viewport.width + 1 || saveBox.y + saveBox.height > viewport.height + 1) {

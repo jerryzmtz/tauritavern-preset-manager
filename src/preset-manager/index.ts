@@ -403,10 +403,10 @@ function renderDialog(): string {
           ${validation && !validation.ok ? `<span class="pm-validation">结构警告 ${validation.duplicateIdentifiers.length + validation.missingOrderReferences.length + validation.promptsWithoutIdentifiers}</span>` : ''}
         </div>
         <div class="pm-footer-actions">
-          <button class="pm-button" type="button" data-action="reset-draft" ${state.dirty ? '' : 'disabled'}>放弃草稿</button>
+          <button class="pm-button" type="button" data-action="reset-draft" ${state.dirty ? '' : 'disabled'}>放弃修改</button>
           <button class="pm-button pm-button-primary" type="button" data-action="save" ${state.dirty && !state.saving ? '' : 'disabled'}>
             <i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>
-            ${state.saving ? '保存中' : '保存目标预设'}
+            ${state.saving ? '保存中' : '保存预设'}
           </button>
         </div>
       </footer>
@@ -861,7 +861,7 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
       return;
     case 'reset-draft':
       resetTargetDraft();
-      state.notice = '已放弃目标草稿';
+      state.notice = '已放弃修改';
       render();
       return;
     case 'save':
@@ -1022,7 +1022,7 @@ async function saveTargetDraft(): Promise<void> {
     state.targetName = savedName;
     state.targetOriginal = deepClone(state.targetDraft);
     state.dirty = false;
-    state.notice = `已保存目标预设。备份：${state.backedUpTargets[savedName] ?? state.backedUpTargets[state.targetName] ?? '本次未新建'}`;
+    state.notice = `已保存预设。备份：${state.backedUpTargets[savedName] ?? state.backedUpTargets[state.targetName] ?? '本次未新建'}`;
     showToast('success', state.notice);
   } catch (error) {
     state.error = error instanceof Error ? error.message : '保存失败';
