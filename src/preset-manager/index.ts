@@ -20,6 +20,7 @@ const FAVORITES_TABLE = 'favorites';
 const FAVORITES_KEY = 'v1';
 const ROOT_ID = 'tt-preset-stitcher-root';
 const OPEN_API_KEY = '__TT_PRESET_STITCHER_OPEN__';
+const HELPER_BUTTON_NAME = '预设缝合';
 
 type MobileTab = 'source' | 'target' | 'favorites' | 'preview';
 type EntryKind = 'source' | 'target' | 'favorite';
@@ -137,6 +138,7 @@ let suppressNextClick = false;
 
 const bootPromise = boot();
 exposeManagerApi();
+registerHelperButton();
 
 async function boot(): Promise<void> {
   await waitForHost();
@@ -149,6 +151,15 @@ function exposeManagerApi(): void {
   (window as TauriWindow)[OPEN_API_KEY] = () => {
     void openManagerFromScript();
   };
+}
+
+function registerHelperButton(): void {
+  $(() => {
+    replaceScriptButtons([{ name: HELPER_BUTTON_NAME, visible: true }]);
+    eventOn(getButtonEvent(HELPER_BUTTON_NAME), () => {
+      void openManagerFromScript();
+    });
+  });
 }
 
 async function openManagerFromScript(): Promise<void> {

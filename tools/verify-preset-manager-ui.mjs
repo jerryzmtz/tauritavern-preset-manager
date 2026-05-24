@@ -161,7 +161,8 @@ function serveFixture() {
       }
     };
   </script>
-  <script type="module" src="/script-entry.js"></script>
+  <script type="module" src="/script-entry.js?run=1"></script>
+  <script type="module" src="/script-entry.js?run=2"></script>
 </body>
 </html>`);
       return;
@@ -169,24 +170,7 @@ function serveFixture() {
 
     if (url.pathname === '/script-entry.js') {
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' });
-      response.end(`const PRESET_MANAGER_BUTTON_NAME = '预设缝合';
-let presetManagerLoadPromise;
-
-async function loadPresetManager() {
-  if (window.__TT_PRESET_STITCHER_OPEN__) {
-    return;
-  }
-  presetManagerLoadPromise ??= import('/dist/preset-manager/index.js');
-  await presetManagerLoadPromise;
-}
-
-window.$(() => {
-  window.replaceScriptButtons([{ name: PRESET_MANAGER_BUTTON_NAME, visible: true }]);
-  window.eventOn(window.getButtonEvent(PRESET_MANAGER_BUTTON_NAME), async () => {
-    await loadPresetManager();
-    window.__TT_PRESET_STITCHER_OPEN__?.();
-  });
-});`);
+      response.end(`import '/dist/preset-manager/index.js';`);
       return;
     }
 
