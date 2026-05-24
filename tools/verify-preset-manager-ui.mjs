@@ -143,11 +143,12 @@ function serveFixture() {
       const order = cloned.prompt_order?.find(item => item.character_id === 100001)?.order
         ?? cloned.prompt_order?.find(item => Array.isArray(item.order))?.order
         ?? [];
-      const promptById = new Map(cloned.prompts.map(prompt => [prompt.identifier, prompt]));
+      const getPromptId = prompt => prompt.identifier ?? prompt.id;
+      const promptById = new Map(cloned.prompts.map(prompt => [getPromptId(prompt), prompt]));
       const orderedPrompts = [
         ...order.map(item => ({ source: promptById.get(item.identifier), order: item })).filter(item => item.source),
         ...cloned.prompts
-          .filter(prompt => !order.some(item => item.identifier === prompt.identifier))
+          .filter(prompt => !order.some(item => item.identifier === getPromptId(prompt)))
           .map(prompt => ({ source: prompt, order: { enabled: prompt.enabled !== false } })),
       ];
       const wrapReadonlyFields = value => {
@@ -164,7 +165,7 @@ function serveFixture() {
       return {
         settings: {},
         prompts: orderedPrompts.map(({ source, order: orderEntry }) => wrapReadonlyFields({
-          id: source.identifier,
+          id: getPromptId(source),
           name: source.name,
           enabled: orderEntry.enabled !== false,
           position: { type: 'relative' },
@@ -230,6 +231,7 @@ function serveFixture() {
       throw new Error('replaceScriptButtons 不应被预设管理器入口使用');
     };
     window.getPresetNames = () => Array.from(window.__presetFixtureStore.keys());
+    window.getLoadedPresetName = () => '夏瑾二改（自用）';
     window.getPreset = name => window.__makeRuntimePreset(window.__presetFixtureStore.get(name));
     window.createOrReplacePreset = async (name, preset, options = {}) => {
       window.__presetFixtureStore.set(name, JSON.parse(JSON.stringify(preset)));
@@ -243,10 +245,23 @@ function serveFixture() {
       }
       return true;
     };
+    window.deletePreset = async name => window.__presetFixtureStore.delete(name);
+    window.renamePreset = async (name, newName) => {
+      if (!window.__presetFixtureStore.has(name)) {
+        return false;
+      }
+      const preset = window.__presetFixtureStore.get(name);
+      window.__presetFixtureStore.delete(name);
+      window.__presetFixtureStore.set(newName, preset);
+      return true;
+    };
     window.TavernHelper = {
       getPresetNames: window.getPresetNames,
+      getLoadedPresetName: window.getLoadedPresetName,
       getPreset: window.getPreset,
       createOrReplacePreset: window.createOrReplacePreset,
+      deletePreset: window.deletePreset,
+      renamePreset: window.renamePreset,
     };
   </script>
   <script type="module" src="/dist/preset-manager/index.js"></script>
@@ -293,11 +308,12 @@ function serveFixture() {
       const order = cloned.prompt_order?.find(item => item.character_id === 100001)?.order
         ?? cloned.prompt_order?.find(item => Array.isArray(item.order))?.order
         ?? [];
-      const promptById = new Map(cloned.prompts.map(prompt => [prompt.identifier, prompt]));
+      const getPromptId = prompt => prompt.identifier ?? prompt.id;
+      const promptById = new Map(cloned.prompts.map(prompt => [getPromptId(prompt), prompt]));
       const orderedPrompts = [
         ...order.map(item => ({ source: promptById.get(item.identifier), order: item })).filter(item => item.source),
         ...cloned.prompts
-          .filter(prompt => !order.some(item => item.identifier === prompt.identifier))
+          .filter(prompt => !order.some(item => item.identifier === getPromptId(prompt)))
           .map(prompt => ({ source: prompt, order: { enabled: prompt.enabled !== false } })),
       ];
       const wrapReadonlyFields = value => {
@@ -314,7 +330,7 @@ function serveFixture() {
       return {
         settings: {},
         prompts: orderedPrompts.map(({ source, order: orderEntry }) => wrapReadonlyFields({
-          id: source.identifier,
+          id: getPromptId(source),
           name: source.name,
           enabled: orderEntry.enabled !== false,
           position: { type: 'relative' },
@@ -382,15 +398,29 @@ function serveFixture() {
         child.__scriptVariables = { ...(child.__scriptVariables ?? {}), ...variables };
       };
       child.getPresetNames = () => Array.from(window.__presetFixtureStore.keys());
+      child.getLoadedPresetName = () => '夏瑾二改（自用）';
       child.getPreset = name => makeRuntimePreset(window.__presetFixtureStore.get(name));
       child.createOrReplacePreset = async (name, preset) => {
         window.__presetFixtureStore.set(name, JSON.parse(JSON.stringify(preset)));
         return true;
       };
+      child.deletePreset = async name => window.__presetFixtureStore.delete(name);
+      child.renamePreset = async (name, newName) => {
+        if (!window.__presetFixtureStore.has(name)) {
+          return false;
+        }
+        const preset = window.__presetFixtureStore.get(name);
+        window.__presetFixtureStore.delete(name);
+        window.__presetFixtureStore.set(newName, preset);
+        return true;
+      };
       child.TavernHelper = {
         getPresetNames: child.getPresetNames,
+        getLoadedPresetName: child.getLoadedPresetName,
         getPreset: child.getPreset,
         createOrReplacePreset: child.createOrReplacePreset,
+        deletePreset: child.deletePreset,
+        renamePreset: child.renamePreset,
       };
       const script = child.document.createElement('script');
       script.type = 'module';
@@ -449,7 +479,14 @@ export function applySurface(element, surface){ element.dataset.ttMobileSurface 
     server.listen(0, '127.0.0.1', () => {
       const address = server.address();
       if (typeof address === 'object' && address) {
-        resolve({ server, url: `http://127.0.0.1:${address.port}`, getSavedPreset: () => savedPreset });
+        resolve({
+          server,
+          url: `http://127.0.0.1:${address.port}`,
+          getSavedPreset: () => savedPreset,
+          clearSavedPreset: () => {
+            savedPreset = null;
+          },
+        });
       }
     });
   });
@@ -535,6 +572,8 @@ async function verifyDirectDragAndUnsavedClose(page, fixture, viewportName) {
     throw new Error(`${viewportName}: 未点击保存却调用了保存接口`);
   }
 
+  await verifyFavoritesTargetDrag(page, fixture, viewportName);
+
   const sourceTitle = await page.locator('.pm-pane-source .pm-row-title').first().textContent();
   const targetCountBefore = await page.locator('.pm-pane-target .pm-row').count();
   await dragBetween(
@@ -551,6 +590,170 @@ async function verifyDirectDragAndUnsavedClose(page, fixture, viewportName) {
   if (fixture.getSavedPreset() !== null) {
     throw new Error(`${viewportName}: 拖拽目标预设操作不应触发保存接口`);
   }
+}
+
+async function verifySourceDeleteDraft(page, fixture, viewportName) {
+  await page.locator('select[name="sourceName"]').selectOption('雪月agent_v1（自改）');
+  const sourceRows = page.locator('.pm-pane-source .pm-row');
+  const before = await sourceRows.count();
+  if (before < 2) {
+    throw new Error(`${viewportName}: 来源列表条目不足，无法验证来源删除`);
+  }
+
+  const deleteButton = sourceRows.first().locator('.pm-row-action.pm-danger');
+  if (await deleteButton.isDisabled()) {
+    throw new Error(`${viewportName}: 来源条目的删除按钮不应禁用`);
+  }
+  await deleteButton.click();
+  await page.waitForFunction(count => document.querySelectorAll('.pm-pane-source .pm-row').length === count - 1, before);
+  if (fixture.getSavedPreset() !== null) {
+    throw new Error(`${viewportName}: 来源删除不应在点击保存前调用保存接口`);
+  }
+
+  await page.getByRole('button', { name: '放弃修改' }).click();
+  await page.waitForFunction(count => document.querySelectorAll('.pm-pane-source .pm-row').length === count, before);
+}
+
+async function verifySourceDetailEditing(page, fixture, viewportName) {
+  await page.locator('select[name="sourceName"]').selectOption('雪月agent_v1（自改）');
+  await page.locator('.pm-pane-source .pm-row').first().click();
+
+  const detailContent = page.locator('textarea[name="detailContent"]');
+  const detailRole = page.locator('select[name="detailRole"]');
+  if (await detailContent.getAttribute('readonly') !== null || await detailRole.isDisabled()) {
+    throw new Error(`${viewportName}: 来源条目被选中后条目详情仍不可编辑`);
+  }
+
+  await detailContent.fill('来源条目的详情编辑只停留在页面草稿里');
+  await detailRole.selectOption('user');
+  if (fixture.getSavedPreset() !== null) {
+    throw new Error(`${viewportName}: 编辑来源条目详情不应在点击保存前调用保存接口`);
+  }
+
+  await page.getByRole('button', { name: '放弃修改' }).click();
+  await page.waitForFunction(() => document.querySelector('textarea[name="detailContent"]')?.value !== '来源条目的详情编辑只停留在页面草稿里');
+}
+
+async function verifyPresetActions(page, fixture, viewportName) {
+  await page.locator('select[name="sourceName"]').selectOption('雪月agent_v1（自改）');
+  fixture.clearSavedPreset();
+
+  const copyName = `复制动作测试-${viewportName}`;
+  page.once('dialog', dialog => {
+    if (dialog.type() !== 'prompt') {
+      throw new Error(`${viewportName}: 复制预设应使用命名输入框`);
+    }
+    void dialog.accept(copyName);
+  });
+  await page.locator('.pm-pane-source [data-action="preset-copy"]').click();
+  await page.waitForFunction(
+    name => document.querySelector('select[name="sourceName"]')?.value === name,
+    copyName,
+  );
+  const savedCopy = fixture.getSavedPreset();
+  if (!savedCopy || savedCopy.name !== copyName) {
+    throw new Error(`${viewportName}: 复制预设没有调用保存接口创建新预设`);
+  }
+  fixture.clearSavedPreset();
+
+  const renamedName = `${copyName} 重命名`;
+  page.once('dialog', dialog => {
+    if (dialog.type() !== 'prompt') {
+      throw new Error(`${viewportName}: 重命名预设应使用命名输入框`);
+    }
+    void dialog.accept(renamedName);
+  });
+  await page.locator('.pm-pane-source [data-action="preset-rename"]').click();
+  await page.waitForFunction(
+    name => document.querySelector('select[name="sourceName"]')?.value === name,
+    renamedName,
+  );
+  if (fixture.getSavedPreset() !== null) {
+    throw new Error(`${viewportName}: 重命名预设不应调用内容保存接口`);
+  }
+
+  page.once('dialog', dialog => {
+    if (dialog.type() !== 'confirm') {
+      throw new Error(`${viewportName}: 删除预设应先确认`);
+    }
+    void dialog.accept();
+  });
+  await page.locator('.pm-pane-source [data-action="preset-delete"]').click();
+  await page.waitForFunction(
+    name => ![...document.querySelector('select[name="sourceName"]')?.options ?? []].some(option => option.value === name),
+    renamedName,
+  );
+  if (fixture.getSavedPreset() !== null) {
+    throw new Error(`${viewportName}: 删除预设不应调用内容保存接口`);
+  }
+}
+
+async function verifyFavoritesTargetDrag(page, fixture, viewportName) {
+  await page.locator('select[name="sourceName"]').selectOption('__preset-manager-favorites__');
+  const targetRowsForSource = page.locator('.pm-pane-target .pm-row');
+  await dragBetween(
+    page,
+    targetRowsForSource.first().locator('.pm-row-grip'),
+    page.locator('.pm-pane-source .pm-list'),
+    'end',
+  );
+  await page.waitForFunction(() => document.querySelectorAll('.pm-pane-source .pm-row').length > 0);
+  await dragBetween(
+    page,
+    targetRowsForSource.nth(1).locator('.pm-row-grip'),
+    page.locator('.pm-pane-source .pm-list'),
+    'end',
+  );
+  await page.waitForFunction(() => document.querySelectorAll('.pm-pane-source .pm-row').length > 1);
+
+  const sourceTitlesBefore = await page.locator('.pm-pane-source .pm-row-title').evaluateAll(nodes => nodes.slice(0, 2).map(node => node.textContent?.trim()));
+  await dragBetween(page, page.locator('.pm-pane-source .pm-row').first().locator('.pm-row-grip'), page.locator('.pm-pane-source .pm-row').nth(1), 'after');
+  const sourceTitlesAfter = await page.locator('.pm-pane-source .pm-row-title').evaluateAll(nodes => nodes.slice(0, 2).map(node => node.textContent?.trim()));
+  if (sourceTitlesAfter[1] !== sourceTitlesBefore[0]) {
+    throw new Error(`${viewportName}: 收藏夹来源状态下拖拽排序未生效`);
+  }
+  if (fixture.getSavedPreset() !== null) {
+    throw new Error(`${viewportName}: 拖拽到收藏夹不应触发预设保存接口`);
+  }
+
+  await page.getByRole('button', { name: '放弃修改' }).click();
+  await page.locator('select[name="sourceName"]').selectOption('雪月agent_v1（自改）');
+  await page.locator('select[name="targetName"]').selectOption('__preset-manager-favorites__');
+
+  const targetRows = page.locator('.pm-pane-target .pm-row');
+  const sourceRows = page.locator('.pm-pane-source .pm-row');
+  await dragBetween(
+    page,
+    sourceRows.first().locator('.pm-row-grip'),
+    page.locator('.pm-pane-target .pm-list'),
+    'end',
+  );
+  await page.waitForFunction(() => document.querySelectorAll('.pm-pane-target .pm-row').length > 0);
+  await dragBetween(
+    page,
+    sourceRows.nth(1).locator('.pm-row-grip'),
+    page.locator('.pm-pane-target .pm-list'),
+    'end',
+  );
+  await page.waitForFunction(() => document.querySelectorAll('.pm-pane-target .pm-row').length > 1);
+
+  const titlesBefore = await page.locator('.pm-pane-target .pm-row-title').evaluateAll(nodes => nodes.slice(0, 2).map(node => node.textContent?.trim()));
+  await dragBetween(page, targetRows.first().locator('.pm-row-grip'), targetRows.nth(1), 'after');
+  const titlesAfter = await page.locator('.pm-pane-target .pm-row-title').evaluateAll(nodes => nodes.slice(0, 2).map(node => node.textContent?.trim()));
+  if (titlesAfter[1] !== titlesBefore[0]) {
+    throw new Error(`${viewportName}: 收藏夹目标状态下拖拽排序未生效`);
+  }
+  if (fixture.getSavedPreset() !== null) {
+    throw new Error(`${viewportName}: 收藏夹拖拽不应触发预设保存接口`);
+  }
+
+  page.once('dialog', dialog => {
+    if (!dialog.message().includes('未保存修改')) {
+      throw new Error(`${viewportName}: 离开收藏夹目标时没有未保存提示`);
+    }
+    void dialog.accept();
+  });
+  await page.locator('select[name="targetName"]').selectOption('夏瑾二改（自用）');
 }
 
 async function verifyZeroSizedIframeParentMount(browser, fixture) {
@@ -629,7 +832,7 @@ try {
     if (!bodyText.includes('预设缝合管理器') || bodyText.includes('????')) {
       throw new Error(`${viewport.name}: 中文 DOM 文本验证失败`);
     }
-    if (bodyText.includes('草稿') || bodyText.includes('结构正常')) {
+    if (!bodyText.includes('条目详情') || bodyText.includes('草稿') || bodyText.includes('结构正常')) {
       throw new Error(`${viewport.name}: 出现了应移除的旧文案`);
     }
 
@@ -643,6 +846,22 @@ try {
     const saveBox = await saveButton.boundingBox();
     if (!saveBox || saveBox.x < 0 || saveBox.y < 0 || saveBox.x + saveBox.width > viewport.width + 1 || saveBox.y + saveBox.height > viewport.height + 1) {
       throw new Error(`${viewport.name}: 保存按钮不可达`);
+    }
+    const isTabbedLayout = viewport.width <= 900;
+    const initialTargetName = await page.locator('select[name="targetName"]').inputValue();
+    if (initialTargetName !== '夏瑾二改（自用）') {
+      throw new Error(`${viewport.name}: 目标预设没有默认使用当前 TT 预设`);
+    }
+    await page.locator('select[name="sourceName"]').selectOption('雪月agent_v1（自改）');
+    const firstSourceActionCount = await page.locator('.pm-pane-source .pm-row').first().locator('.pm-row-action').count();
+    const firstTargetActionCount = await page.locator('.pm-pane-target .pm-row').first().locator('.pm-row-action').count();
+    if (firstSourceActionCount < 2 || firstTargetActionCount < 2) {
+      throw new Error(`${viewport.name}: 条目行没有保留收藏和删除按钮`);
+    }
+    const sourcePresetActionCount = await page.locator('.pm-pane-source .pm-preset-action').count();
+    const targetPresetActionCount = await page.locator('.pm-pane-target .pm-preset-action').count();
+    if (sourcePresetActionCount !== 3 || targetPresetActionCount !== 3) {
+      throw new Error(`${viewport.name}: 来源和目标预设没有同时提供复制、重命名、删除操作`);
     }
 
     const sourceSearch = page.locator('input[name="sourceQuery"]');
@@ -677,20 +896,43 @@ try {
     await sourceSearch.fill('');
 
     if (viewport.name === 'desktop-wide') {
+      await verifySourceDetailEditing(page, fixture, viewport.name);
+      await verifyPresetActions(page, fixture, viewport.name);
+      await verifySourceDeleteDraft(page, fixture, viewport.name);
       await verifySelectionKeepsScroll(page, viewport.name);
       await verifyDirectDragAndUnsavedClose(page, fixture, viewport.name);
       await page.locator('input[name="sourceQuery"]').fill('');
     }
 
-    if (viewport.width < 768) {
-      await page.getByRole('button', { name: '来源', exact: true }).click();
-      await page.getByTitle('复制到目标').first().click();
+    if (isTabbedLayout) {
       await page.getByRole('button', { name: '目标', exact: true }).click();
+      await page.locator('.pm-pane-target .pm-row').first().click();
     } else {
-      await page.getByTitle('复制到目标').first().click();
+      const sourceTitle = await page.locator('.pm-pane-source .pm-row-title').first().textContent();
+      await dragBetween(
+        page,
+        page.locator('.pm-pane-source .pm-row').first().locator('.pm-row-grip'),
+        page.locator('.pm-pane-target .pm-list'),
+        'end',
+      );
+      await page.waitForFunction(
+        title => [...document.querySelectorAll('.pm-pane-target .pm-row-title')]
+          .some(node => node.textContent?.trim() === title),
+        sourceTitle?.trim(),
+      );
     }
 
-    await page.getByText('📔小说').last().waitFor();
+    if (isTabbedLayout) {
+      await page.getByRole('button', { name: '条目详情', exact: true }).click();
+    }
+    await page.locator('textarea[name="detailContent"]').fill('详情编辑只停留在页面草稿里');
+    await page.locator('select[name="detailRole"]').selectOption('user');
+    if (fixture.getSavedPreset() !== null) {
+      throw new Error(`${viewport.name}: 详情编辑不应在点击保存前调用保存接口`);
+    }
+    if (isTabbedLayout) {
+      await page.getByRole('button', { name: '目标', exact: true }).click();
+    }
     const accentColor = await page.locator('.pm-pane-target .pm-row.is-selected').evaluate(element => getComputedStyle(element).borderColor);
     if (!accentColor || accentColor === 'rgba(0, 0, 0, 0)') {
       throw new Error(`${viewport.name}: 主题色未应用到选中状态`);

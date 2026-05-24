@@ -3,7 +3,6 @@ import {
   createFavoriteFromEntry,
   deepClone,
   FavoriteEntry,
-  getContentLength,
   insertPromptFromEntry,
   listPromptEntries,
   materializePreset,
@@ -12,7 +11,9 @@ import {
   Preset,
   PromptEntry,
   removePrompt,
+  setPromptContent,
   setPromptEnabled,
+  setPromptRole,
   validatePreset,
 } from './core';
 
@@ -20,6 +21,7 @@ const HELPER_BUTTON_NAME = '预设缝合';
 const STORAGE_NAMESPACE = 'preset-manager';
 const FAVORITES_TABLE = 'favorites';
 const FAVORITES_KEY = 'v1';
+const LAST_SOURCE_KEY = 'last-source';
 const HOST_ROOT_ID = 'tt-preset-stitcher-host';
 const ROOT_ID = 'tt-preset-stitcher-root';
 const OPEN_MANAGER_EVENT = 'preset-manager:open';
@@ -29,10 +31,14 @@ const DEBUG_ENTRY_LIMIT = 80;
 const BUTTON_REGISTRATION_RETRY_LIMIT = 20;
 const BUTTON_REGISTRATION_RETRY_DELAY_MS = 250;
 const OPEN_REQUEST_DEBOUNCE_MS = 250;
+const FAVORITES_PRESET_VALUE = '__preset-manager-favorites__';
+const FAVORITES_PRESET_LABEL = '收藏夹';
 
-type MobileTab = 'source' | 'target' | 'favorites' | 'preview';
+type MobileTab = 'source' | 'target' | 'preview';
 type EntryKind = 'source' | 'target' | 'favorite';
+type PresetPaneKind = 'source' | 'target';
 type FilterValue = 'all' | 'enabled' | 'disabled' | 'system' | 'user' | 'assistant';
+type DetailRole = 'system' | 'user' | 'assistant';
 type RuntimeFunction = (...args: any[]) => unknown;
 type RuntimeHost = Record<string, unknown> & {
   TavernHelper?: Record<string, unknown>;
@@ -42,6 +48,8 @@ type RuntimeCreateOrReplacePreset = (
   preset: unknown,
   options?: { render?: 'debounced' | 'immediate' | 'none' },
 ) => Promise<boolean>;
+type RuntimeDeletePreset = (presetName: string) => Promise<boolean>;
+type RuntimeRenamePreset = (presetName: string, newName: string) => Promise<boolean>;
 
 interface DebugEntry {
   at: string;
@@ -66,8 +74,14 @@ interface PointerDragState {
 }
 
 interface DropLocation {
+  zone: 'source' | 'target';
   index: number;
   row: HTMLElement | null;
+}
+
+interface DetailSelection {
+  kind: 'source' | 'target';
+  entry: PromptEntry;
 }
 
 interface AppState {
@@ -83,12 +97,16 @@ interface AppState {
   targetFilter: FilterValue;
   activeTab: MobileTab;
   dirty: boolean;
+  sourceDirty: boolean;
+  targetDirty: boolean;
   saving: boolean;
   notice: string;
   error: string;
   selectedSourceId: string;
   selectedTargetId: string;
   selectedFavoriteId: string;
+  sourceOriginal: Preset | null;
+  sourceDraft: Preset | null;
   targetOriginal: Preset | null;
   targetDraft: Preset | null;
   backedUpTargets: Record<string, string>;
@@ -108,12 +126,16 @@ const state: AppState = {
   targetFilter: 'all',
   activeTab: 'source',
   dirty: false,
+  sourceDirty: false,
+  targetDirty: false,
   saving: false,
   notice: '',
   error: '',
   selectedSourceId: '',
   selectedTargetId: '',
   selectedFavoriteId: '',
+  sourceOriginal: null,
+  sourceDraft: null,
   targetOriginal: null,
   targetDraft: null,
   backedUpTargets: {},
@@ -312,6 +334,19 @@ function helperGetPresetNames(): string[] {
   return getTavernHelperFunction<() => string[]>('getPresetNames')();
 }
 
+function helperGetLoadedPresetName(): string {
+  const fn = getOptionalTavernHelperFunction<() => string>('getLoadedPresetName');
+  if (!fn) {
+    return '';
+  }
+  try {
+    return fn();
+  } catch (error) {
+    diagnose('loaded-preset-name-error', { message: error instanceof Error ? error.message : String(error) });
+    return '';
+  }
+}
+
 function helperGetPreset(presetName: string): unknown {
   return getTavernHelperFunction<(name: string) => unknown>('getPreset')(presetName);
 }
@@ -322,6 +357,14 @@ function helperCreateOrReplacePreset(
   options: { render: 'immediate' | 'none' },
 ): Promise<boolean> {
   return getTavernHelperFunction<RuntimeCreateOrReplacePreset>('createOrReplacePreset')(presetName, preset, options);
+}
+
+function helperDeletePreset(presetName: string): Promise<boolean> {
+  return getTavernHelperFunction<RuntimeDeletePreset>('deletePreset')(presetName);
+}
+
+function helperRenamePreset(presetName: string, newName: string): Promise<boolean> {
+  return getTavernHelperFunction<RuntimeRenamePreset>('renamePreset')(presetName, newName);
 }
 
 function getTavernHelperFunction<T extends RuntimeFunction>(name: string): T {
@@ -344,6 +387,20 @@ function getTavernHelperFunction<T extends RuntimeFunction>(name: string): T {
   throw new Error(`酒馆助手接口不可用：${name}`);
 }
 
+function getOptionalTavernHelperFunction<T extends RuntimeFunction>(name: string): T | null {
+  const runtime = globalThis as unknown as RuntimeHost;
+  const helperValue = runtime.TavernHelper?.[name];
+  if (typeof helperValue === 'function') {
+    return helperValue.bind(runtime.TavernHelper) as T;
+  }
+
+  const directValue = runtime[name];
+  if (typeof directValue === 'function') {
+    return directValue.bind(runtime) as T;
+  }
+  return null;
+}
+
 async function ensureRuntimeReady(): Promise<void> {
   if (state.ready) {
     return;
@@ -358,6 +415,7 @@ async function ensureRuntimeReady(): Promise<void> {
 async function bootRuntime(): Promise<void> {
   diagnose('boot-runtime-start');
   state.favorites = await loadFavorites();
+  state.sourceName = loadLastSourceName();
   state.ready = true;
   diagnose('boot-runtime-success', { favorites: state.favorites.length });
 }
@@ -366,16 +424,20 @@ async function openManager(): Promise<void> {
   diagnose('open-start');
   await ensureRuntimeReady();
   clearMessage();
+  state.sourceDraft = null;
+  state.sourceOriginal = null;
   state.targetDraft = null;
   state.targetOriginal = null;
-  state.dirty = false;
-  hydratePresetList();
+  state.sourceDirty = false;
+  state.targetDirty = false;
+  syncDirtyState();
+  hydratePresetList({ targetFromLoaded: true });
   state.isOpen = true;
   render();
   diagnose('open-success', { presets: state.presetNames.length, source: state.sourceName, target: state.targetName });
 }
 
-function hydratePresetList(): void {
+function hydratePresetList(options: { targetFromLoaded?: boolean } = {}): void {
   state.presetNames = helperGetPresetNames()
     .filter(name => name !== 'in_use')
     .sort((lhs, rhs) => lhs.localeCompare(rhs, 'zh-Hans-CN'));
@@ -384,13 +446,25 @@ function hydratePresetList(): void {
     sample: state.presetNames.slice(0, 6),
   });
 
-  if (!state.sourceName || !state.presetNames.includes(state.sourceName)) {
-    state.sourceName = state.presetNames[0] ?? '';
+  if (!state.sourceName || !isSelectablePreset(state.sourceName)) {
+    state.sourceName = state.presetNames[0] ?? FAVORITES_PRESET_VALUE;
   }
 
-  if (!state.targetName || !state.presetNames.includes(state.targetName)) {
+  const loadedTargetName = options.targetFromLoaded ? helperGetLoadedPresetName() : '';
+  if (loadedTargetName && isSelectablePreset(loadedTargetName)) {
+    if (state.targetName !== loadedTargetName) {
+      state.targetName = loadedTargetName;
+      resetTargetDraft();
+    }
+  }
+
+  if (!state.targetName || !isSelectablePreset(state.targetName)) {
     state.targetName = state.presetNames.find(name => name !== state.sourceName) ?? state.sourceName;
     resetTargetDraft();
+  }
+
+  if (!state.sourceDraft) {
+    resetSourceDraft();
   }
 
   if (!state.targetDraft) {
@@ -398,15 +472,39 @@ function hydratePresetList(): void {
   }
 }
 
+function resetSourceDraft(): void {
+  const sourcePreset = getPresetByName(state.sourceName);
+  state.sourceOriginal = sourcePreset ? deepClone(sourcePreset) : null;
+  state.sourceDraft = sourcePreset ? deepClone(sourcePreset) : null;
+  state.sourceDirty = false;
+  state.selectedSourceId = '';
+  syncDirtyState();
+}
+
 function resetTargetDraft(): void {
+  if (isFavoritesPreset(state.targetName)) {
+    const favoritesDraft = createFavoritesPresetDraft();
+    state.targetOriginal = deepClone(favoritesDraft);
+    state.targetDraft = favoritesDraft;
+    state.targetDirty = false;
+    state.selectedTargetId = '';
+    syncDirtyState();
+    return;
+  }
+
   const targetPreset = getPresetByName(state.targetName);
   state.targetOriginal = targetPreset ? deepClone(targetPreset) : null;
   state.targetDraft = targetPreset ? deepClone(targetPreset) : null;
-  state.dirty = false;
+  state.targetDirty = false;
   state.selectedTargetId = '';
+  syncDirtyState();
 }
 
 function getPresetByName(name: string): Preset | null {
+  if (isFavoritesPreset(name)) {
+    return createFavoritesPresetDraft();
+  }
+
   try {
     return deepClone(materializePreset(helperGetPreset(name) as Preset));
   } catch (error) {
@@ -415,6 +513,71 @@ function getPresetByName(name: string): Preset | null {
       message: error instanceof Error ? error.message : String(error),
     });
     return null;
+  }
+}
+
+function isFavoritesPreset(name: string): boolean {
+  return name === FAVORITES_PRESET_VALUE;
+}
+
+function isSelectablePreset(name: string): boolean {
+  return isFavoritesPreset(name) || state.presetNames.includes(name);
+}
+
+function getPresetDisplayName(name: string): string {
+  return isFavoritesPreset(name) ? FAVORITES_PRESET_LABEL : name;
+}
+
+function createFavoritesPresetDraft(): Preset {
+  return {
+    prompts: state.favorites.map(favorite => ({
+      ...deepClone(favorite.prompt),
+      id: favorite.id,
+      identifier: favorite.id,
+      name: favorite.name,
+      enabled: favorite.enabled,
+    })),
+  };
+}
+
+function getEditableSourceDraft(): Preset | null {
+  if (state.sourceName === state.targetName && state.targetDraft) {
+    return state.targetDraft;
+  }
+  return state.sourceDraft;
+}
+
+function markSourceDirty(): void {
+  if (state.sourceName === state.targetName && state.targetDraft) {
+    state.targetDirty = true;
+  } else {
+    state.sourceDirty = true;
+  }
+  syncDirtyState();
+}
+
+function markTargetDirty(): void {
+  state.targetDirty = true;
+  syncDirtyState();
+}
+
+function syncDirtyState(): void {
+  state.dirty = state.sourceDirty || state.targetDirty;
+}
+
+function loadLastSourceName(): string {
+  try {
+    return localStorage.getItem(`${STORAGE_NAMESPACE}:${LAST_SOURCE_KEY}`) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function saveLastSourceName(): void {
+  try {
+    localStorage.setItem(`${STORAGE_NAMESPACE}:${LAST_SOURCE_KEY}`, state.sourceName);
+  } catch {
+    // ignored
   }
 }
 
@@ -562,6 +725,11 @@ function toInputElement(target: EventTarget | null): HTMLInputElement | null {
   return element?.tagName === 'INPUT' ? element as HTMLInputElement : null;
 }
 
+function toTextAreaElement(target: EventTarget | null): HTMLTextAreaElement | null {
+  const element = toElement(target);
+  return element?.tagName === 'TEXTAREA' ? element as HTMLTextAreaElement : null;
+}
+
 function toSelectElement(target: EventTarget | null): HTMLSelectElement | null {
   const element = toElement(target);
   return element?.tagName === 'SELECT' ? element as HTMLSelectElement : null;
@@ -655,8 +823,7 @@ function applyMobileSurfaces(root: HTMLElement): void {
 function renderDialog(): string {
   const sourceEntries = getSourceEntries();
   const targetEntries = getTargetEntries();
-  const selected = getPreviewEntry();
-  const favoriteEntries = getFilteredFavorites();
+  const selected = getDetailSelection();
   const validation = state.targetDraft ? validatePreset(state.targetDraft) : null;
 
   return `
@@ -665,7 +832,7 @@ function renderDialog(): string {
       <header class="pm-header">
         <div class="pm-title-block">
           <div class="pm-title">预设缝合管理器</div>
-          <div class="pm-subtitle">${escapeHtml(getStatusText(sourceEntries.length, targetEntries.length, favoriteEntries.length))}</div>
+          <div class="pm-subtitle">${escapeHtml(getStatusText(sourceEntries.length, targetEntries.length))}</div>
         </div>
         <div class="pm-header-actions">
           <button class="pm-icon-button" type="button" data-action="refresh" title="刷新预设"><i class="fa-solid fa-rotate" aria-hidden="true"></i></button>
@@ -676,23 +843,13 @@ function renderDialog(): string {
       <nav class="pm-mobile-tabs" aria-label="移动端视图">
         ${renderTab('source', '来源')}
         ${renderTab('target', '目标')}
-        ${renderTab('favorites', '收藏')}
-        ${renderTab('preview', '预览')}
+        ${renderTab('preview', '条目详情')}
       </nav>
-
-      ${renderMessage()}
 
       <main class="pm-body">
         ${renderPresetPane('source', '来源预设', state.sourceName, state.sourceQuery, state.sourceFilter, sourceEntries)}
-        ${renderTransferColumn()}
         ${renderPresetPane('target', '目标预设', state.targetName, state.targetQuery, state.targetFilter, targetEntries)}
-        <aside class="pm-side-pane" data-pane="favorites">
-          ${renderFavorites(favoriteEntries)}
-          ${renderInspector(selected, validation)}
-        </aside>
-        <section class="pm-preview-pane" data-pane="preview">
-          ${renderInspector(selected, validation)}
-        </section>
+        ${renderDetail(selected)}
       </main>
 
       <footer class="pm-footer">
@@ -727,14 +884,17 @@ function renderPresetPane(kind: 'source' | 'target', title: string, selectedPres
   return `
     <section class="pm-pane pm-pane-${kind}" data-pane="${kind}">
       <div class="pm-pane-head">
-        <h2>${title}</h2>
-        <span class="pm-count">${entries.length}</span>
+        <div class="pm-pane-title">
+          <h2>${title}</h2>
+          <span class="pm-count">${entries.length}</span>
+        </div>
+        ${renderPresetActions(kind, selectedPreset)}
       </div>
       <div class="pm-controls">
         <label class="pm-field">
           <span>预设</span>
           <select name="${selectName}" data-action="${action}">
-            ${state.presetNames.map(name => `<option value="${escapeAttr(name)}" ${name === selectedPreset ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('')}
+            ${renderPresetOptions(selectedPreset)}
           </select>
         </label>
         <label class="pm-field">
@@ -755,6 +915,34 @@ function renderPresetPane(kind: 'source' | 'target', title: string, selectedPres
   `;
 }
 
+function renderPresetActions(kind: 'source' | 'target', selectedPreset: string): string {
+  const label = kind === 'source' ? '来源预设' : '目标预设';
+  const disabled = isFavoritesPreset(selectedPreset) ? 'disabled' : '';
+  const disabledTitle = isFavoritesPreset(selectedPreset) ? '收藏夹不是磁盘预设' : '';
+
+  return `
+    <div class="pm-preset-actions" aria-label="${label}操作">
+      <button class="pm-preset-action" type="button" data-action="preset-copy" data-preset-pane="${kind}" title="${disabledTitle || `复制${label}`}" aria-label="复制${label}" ${disabled}>
+        <i class="fa-solid fa-copy" aria-hidden="true"></i>
+      </button>
+      <button class="pm-preset-action" type="button" data-action="preset-rename" data-preset-pane="${kind}" title="${disabledTitle || `重命名${label}`}" aria-label="重命名${label}" ${disabled}>
+        <i class="fa-solid fa-pen-to-square" aria-hidden="true"></i>
+      </button>
+      <button class="pm-preset-action pm-danger" type="button" data-action="preset-delete" data-preset-pane="${kind}" title="${disabledTitle || `删除${label}`}" aria-label="删除${label}" ${disabled}>
+        <i class="fa-solid fa-trash" aria-hidden="true"></i>
+      </button>
+    </div>
+  `;
+}
+
+function renderPresetOptions(selectedPreset: string): string {
+  const favoritesOption = `<option value="${FAVORITES_PRESET_VALUE}" ${isFavoritesPreset(selectedPreset) ? 'selected' : ''}>${FAVORITES_PRESET_LABEL}</option>`;
+  const presetOptions = state.presetNames
+    .map(name => `<option value="${escapeAttr(name)}" ${name === selectedPreset ? 'selected' : ''}>${escapeHtml(name)}</option>`)
+    .join('');
+  return `${favoritesOption}${presetOptions}`;
+}
+
 function renderFilterOptions(active: FilterValue): string {
   const options: Array<[FilterValue, string]> = [
     ['all', '全部'],
@@ -773,18 +961,7 @@ function renderEntryRow(kind: 'source' | 'target', entry: PromptEntry, index: nu
   const selected = selectedId === entry.id ? 'is-selected' : '';
   const enabled = entry.enabled ? '启用' : '禁用';
   const contentLength = entry.content.length;
-  const rowActions = kind === 'source'
-    ? `
-      <button class="pm-row-action" type="button" data-action="favorite-source" data-id="${escapeAttr(entry.id)}" title="收藏条目"><i class="fa-regular fa-star" aria-hidden="true"></i></button>
-      <button class="pm-row-action" type="button" data-action="copy-source" data-id="${escapeAttr(entry.id)}" title="复制到目标"><i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
-    `
-    : `
-      <button class="pm-row-action" type="button" data-action="target-toggle" data-id="${escapeAttr(entry.id)}" title="${entry.enabled ? '设为禁用' : '设为启用'}"><i class="fa-solid ${entry.enabled ? 'fa-toggle-on' : 'fa-toggle-off'}" aria-hidden="true"></i></button>
-      <button class="pm-row-action" type="button" data-action="target-up" data-id="${escapeAttr(entry.id)}" title="上移"><i class="fa-solid fa-arrow-up" aria-hidden="true"></i></button>
-      <button class="pm-row-action" type="button" data-action="target-down" data-id="${escapeAttr(entry.id)}" title="下移"><i class="fa-solid fa-arrow-down" aria-hidden="true"></i></button>
-      <button class="pm-row-action" type="button" data-action="favorite-target" data-id="${escapeAttr(entry.id)}" title="收藏条目"><i class="fa-regular fa-star" aria-hidden="true"></i></button>
-      <button class="pm-row-action pm-danger" type="button" data-action="target-remove" data-id="${escapeAttr(entry.id)}" title="从目标预设移除"><i class="fa-solid fa-trash" aria-hidden="true"></i></button>
-    `;
+  const actions = renderRowActions(kind, entry);
 
   return `
     <div class="pm-row ${selected}" role="button" tabindex="0" data-entry-kind="${kind}" data-id="${escapeAttr(entry.id)}" data-index="${index}">
@@ -797,111 +974,74 @@ function renderEntryRow(kind: 'source' | 'target', entry: PromptEntry, index: nu
           <span>${contentLength} 字</span>
         </div>
       </div>
-      <div class="pm-row-actions">${rowActions}</div>
+      <div class="pm-row-actions">${actions}</div>
     </div>
   `;
 }
 
-function renderTransferColumn(): string {
+function renderRowActions(kind: 'source' | 'target', entry: PromptEntry): string {
+  const isFavoritesRow = kind === 'source' ? isFavoritesPreset(state.sourceName) : isFavoritesPreset(state.targetName);
+  const favoriteAction = kind === 'source' ? 'favorite-source' : 'favorite-target';
+  const deleteAction = kind === 'target'
+    ? 'target-remove'
+    : 'source-remove';
+  const favoriteDisabled = isFavoritesRow ? 'disabled' : '';
+  const deleteDisabled = '';
+  const favoriteTitle = isFavoritesRow ? '已在收藏夹' : '收藏条目';
+  const deleteTitle = '删除条目';
+  const favoriteIcon = isFavoritesRow ? 'fa-solid' : 'fa-regular';
+
   return `
-    <section class="pm-transfer" aria-label="条目操作">
-      <button class="pm-transfer-button" type="button" data-action="copy-selected" title="复制选中的来源条目到目标"><i class="fa-solid fa-arrow-right" aria-hidden="true"></i><span>复制</span></button>
-      <button class="pm-transfer-button" type="button" data-action="favorite-selected" title="收藏选中的来源条目"><i class="fa-regular fa-star" aria-hidden="true"></i><span>收藏</span></button>
-      <button class="pm-transfer-button" type="button" data-action="insert-favorite" title="把选中的收藏插入目标"><i class="fa-solid fa-bookmark" aria-hidden="true"></i><span>插入</span></button>
+    <button class="pm-row-action" type="button" data-action="${favoriteAction}" data-id="${escapeAttr(entry.id)}" title="${favoriteTitle}" aria-label="${favoriteTitle}" ${favoriteDisabled}>
+      <i class="${favoriteIcon} fa-star" aria-hidden="true"></i>
+    </button>
+    <button class="pm-row-action pm-danger" type="button" data-action="${deleteAction}" data-id="${escapeAttr(entry.id)}" title="${deleteTitle}" aria-label="${deleteTitle}" ${deleteDisabled}>
+      <i class="fa-solid fa-trash" aria-hidden="true"></i>
+    </button>
+  `;
+}
+
+function renderDetail(selection: DetailSelection | null): string {
+  const entry = selection?.entry;
+  const editable = selection?.kind === 'source'
+    ? Boolean(getEditableSourceDraft())
+    : selection?.kind === 'target' && Boolean(state.targetDraft);
+  const name = entry?.name ?? '未选择条目';
+  const content = entry?.content ?? '';
+  const role = entry?.role ?? 'system';
+
+  return `
+    <section class="pm-detail-pane" data-pane="preview">
+      <div class="pm-pane-head">
+        <h2>条目详情</h2>
+        <span class="pm-count">${content.length} 字</span>
+      </div>
+      <div class="pm-detail-toolbar">
+        <div class="pm-detail-title">${escapeHtml(name)}</div>
+        <label class="pm-role-field">
+          <span>角色</span>
+          <select name="detailRole" ${editable ? '' : 'disabled'}>
+            ${renderRoleOptions(role)}
+          </select>
+        </label>
+      </div>
+      <textarea name="detailContent" data-entry-id="${escapeAttr(entry?.id ?? '')}" data-entry-kind="${selection?.kind ?? ''}" ${editable ? '' : 'readonly'} spellcheck="false">${escapeHtml(content)}</textarea>
     </section>
   `;
 }
 
-function renderFavorites(favorites: FavoriteEntry[]): string {
-  return `
-    <div class="pm-favorites">
-      <div class="pm-pane-head">
-        <h2>收藏夹</h2>
-        <span class="pm-count">${favorites.length}</span>
-      </div>
-      <label class="pm-field">
-        <span>搜索</span>
-        <input name="favoriteQuery" value="${escapeAttr(state.favoriteQuery)}" placeholder="收藏名或来源" autocomplete="off" />
-      </label>
-      <div class="pm-list pm-list-compact" data-drop-zone="favorite">
-        ${favorites.length ? favorites.map(renderFavoriteRow).join('') : renderEmpty('favorite')}
-      </div>
-    </div>
-  `;
-}
-
-function renderFavoriteRow(favorite: FavoriteEntry): string {
-  const selected = state.selectedFavoriteId === favorite.id ? 'is-selected' : '';
-  return `
-    <div class="pm-row pm-row-favorite ${selected}" role="button" tabindex="0" data-entry-kind="favorite" data-id="${escapeAttr(favorite.id)}">
-      <div class="pm-row-grip" data-drag-handle="true" aria-hidden="true" title="拖拽条目"><i class="fa-solid fa-bookmark"></i></div>
-      <div class="pm-row-main">
-        <div class="pm-row-title">${escapeHtml(favorite.name)}</div>
-        <div class="pm-row-meta">
-          <span>${escapeHtml(favorite.sourcePreset)}</span>
-          <span>${favorite.enabled ? '启用' : '禁用'}</span>
-          <span>${getContentLength(favorite.prompt)} 字</span>
-        </div>
-      </div>
-      <div class="pm-row-actions">
-        <button class="pm-row-action" type="button" data-action="insert-favorite-id" data-id="${escapeAttr(favorite.id)}" title="插入目标"><i class="fa-solid fa-plus" aria-hidden="true"></i></button>
-        <button class="pm-row-action pm-danger" type="button" data-action="delete-favorite" data-id="${escapeAttr(favorite.id)}" title="删除收藏"><i class="fa-solid fa-trash" aria-hidden="true"></i></button>
-      </div>
-    </div>
-  `;
-}
-
-function renderInspector(entry: PromptEntry | FavoriteEntry | null, validation: ReturnType<typeof validatePreset> | null): string {
-  const name = entry ? ('prompt' in entry ? entry.name : '未命名条目') : '未选择条目';
-  const prompt = entry?.prompt;
-  const content = prompt && typeof prompt.content === 'string' ? prompt.content : '';
-  const role = prompt && typeof prompt.role === 'string' ? prompt.role : 'system';
-  const identifier = prompt && typeof prompt.identifier === 'string' ? prompt.identifier : '';
-
-  return `
-    <div class="pm-inspector">
-      <div class="pm-pane-head">
-        <h2>预览</h2>
-        <span class="pm-count">${content.length} 字</span>
-      </div>
-      <div class="pm-inspector-fields">
-        <div><span>名称</span><strong>${escapeHtml(name)}</strong></div>
-        <div><span>角色</span><strong>${escapeHtml(role)}</strong></div>
-        <div><span>ID</span><code>${escapeHtml(identifier)}</code></div>
-      </div>
-      <textarea readonly spellcheck="false">${escapeHtml(content)}</textarea>
-      ${renderValidation(validation)}
-    </div>
-  `;
-}
-
-function renderValidation(validation: ReturnType<typeof validatePreset> | null): string {
-  if (!validation || validation.ok) {
-    return '';
-  }
-
-  const parts: string[] = [];
-  if (validation.duplicateIdentifiers.length) {
-    parts.push(`重复 ID ${validation.duplicateIdentifiers.length}`);
-  }
-  if (validation.missingOrderReferences.length) {
-    parts.push(`缺失引用 ${validation.missingOrderReferences.length}`);
-  }
-  if (validation.promptsWithoutIdentifiers) {
-    parts.push(`无 ID 条目 ${validation.promptsWithoutIdentifiers}`);
-  }
-
-  return `<div class="pm-structure-warning"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>${escapeHtml(parts.join('，'))}</div>`;
-}
-
-function renderMessage(): string {
-  if (state.error) {
-    return `<div class="pm-message pm-message-error">${escapeHtml(state.error)}</div>`;
-  }
-  if (state.notice) {
-    return `<div class="pm-message">${escapeHtml(state.notice)}</div>`;
-  }
-  return '';
+function renderRoleOptions(active: string): string {
+  const labels: Record<DetailRole, string> = {
+    system: 'system',
+    user: 'user',
+    assistant: 'assistant',
+  };
+  const roles = (Object.keys(labels) as DetailRole[]).includes(active as DetailRole)
+    ? Object.keys(labels)
+    : [active, ...Object.keys(labels)];
+  return roles
+    .map(role => `<option value="${escapeAttr(role)}" ${role === active ? 'selected' : ''}>${escapeHtml(labels[role as DetailRole] ?? role)}</option>`)
+    .join('');
 }
 
 function renderEmpty(kind: string): string {
@@ -909,15 +1049,15 @@ function renderEmpty(kind: string): string {
   return `<div class="pm-empty">${label}</div>`;
 }
 
-function getStatusText(sourceCount: number, targetCount: number, favoriteCount: number): string {
+function getStatusText(sourceCount: number, targetCount: number): string {
   if (!state.presetNames.length) {
     return '未发现 OpenAI 预设';
   }
-  return `来源 ${sourceCount} 条，目标 ${targetCount} 条，收藏 ${favoriteCount} 条`;
+  return `来源 ${sourceCount} 条，目标 ${targetCount} 条，收藏 ${state.favorites.length} 条`;
 }
 
 function getSourceEntries(): PromptEntry[] {
-  const preset = getPresetByName(state.sourceName);
+  const preset = getEditableSourceDraft();
   return preset ? filterEntries(listPromptEntries(deepClone(preset)), state.sourceQuery, state.sourceFilter) : [];
 }
 
@@ -944,24 +1084,13 @@ function filterEntries(entries: PromptEntry[], query: string, filter: FilterValu
   });
 }
 
-function getFilteredFavorites(): FavoriteEntry[] {
-  const query = state.favoriteQuery.trim().toLocaleLowerCase();
-  if (!query) {
-    return state.favorites;
-  }
-  return state.favorites.filter(item => `${item.name}\n${item.sourcePreset}\n${item.prompt.content ?? ''}`.toLocaleLowerCase().includes(query));
-}
-
-function getPreviewEntry(): PromptEntry | FavoriteEntry | null {
-  const source = getSourceEntries().find(entry => entry.id === state.selectedSourceId);
-  if (source) {
-    return source;
-  }
+function getDetailSelection(): DetailSelection | null {
   const target = getTargetEntries().find(entry => entry.id === state.selectedTargetId);
   if (target) {
-    return target;
+    return { kind: 'target', entry: target };
   }
-  return state.favorites.find(entry => entry.id === state.selectedFavoriteId) ?? null;
+  const source = getSourceEntries().find(entry => entry.id === state.selectedSourceId);
+  return source ? { kind: 'source', entry: source } : null;
 }
 
 function onRootClick(event: MouseEvent): void {
@@ -999,12 +1128,17 @@ function onRootChange(event: Event): void {
   }
 
   if (target.name === 'sourceName') {
+    if (state.sourceDirty && target.value !== state.sourceName && !window.confirm('切换来源预设会放弃当前未保存修改。继续切换？')) {
+      target.value = state.sourceName;
+      return;
+    }
     state.sourceName = target.value;
-    state.selectedSourceId = '';
+    saveLastSourceName();
+    resetSourceDraft();
   }
 
   if (target.name === 'targetName') {
-    if (state.dirty && target.value !== state.targetName && !window.confirm('切换目标预设会放弃当前未保存修改。继续切换？')) {
+    if (state.targetDirty && target.value !== state.targetName && !window.confirm('切换目标预设会放弃当前未保存修改。继续切换？')) {
       target.value = state.targetName;
       return;
     }
@@ -1020,44 +1154,48 @@ function onRootChange(event: Event): void {
     state.targetFilter = target.value as FilterValue;
   }
 
+  if (target.name === 'detailRole') {
+    updateDetailRole(target.value);
+  }
+
   render();
 }
 
 function onRootInput(event: Event): void {
-  const target = toInputElement(event.target);
+  const target = toInputElement(event.target) ?? toTextAreaElement(event.target);
   if (!target) {
     return;
   }
 
-  updateInputState(target);
+  updateTextControlState(target);
 
   if (isComposingInput || ('isComposing' in event && Boolean((event as InputEvent).isComposing))) {
     return;
   }
 
-  renderPreservingInput(target);
+  renderPreservingTextControl(target);
 }
 
 function onCompositionStart(event: CompositionEvent): void {
-  const target = toInputElement(event.target);
-  if (target && isManagedInput(target)) {
+  const target = toInputElement(event.target) ?? toTextAreaElement(event.target);
+  if (target && isManagedTextControl(target)) {
     isComposingInput = true;
   }
 }
 
 function onCompositionEnd(event: CompositionEvent): void {
-  const target = toInputElement(event.target);
-  if (!target || !isManagedInput(target)) {
+  const target = toInputElement(event.target) ?? toTextAreaElement(event.target);
+  if (!target || !isManagedTextControl(target)) {
     isComposingInput = false;
     return;
   }
 
   isComposingInput = false;
-  updateInputState(target);
-  renderPreservingInput(target);
+  updateTextControlState(target);
+  renderPreservingTextControl(target);
 }
 
-function updateInputState(target: HTMLInputElement): void {
+function updateTextControlState(target: HTMLInputElement | HTMLTextAreaElement): void {
   if (target.name === 'sourceQuery') {
     state.sourceQuery = target.value;
   }
@@ -1067,26 +1205,34 @@ function updateInputState(target: HTMLInputElement): void {
   if (target.name === 'favoriteQuery') {
     state.favoriteQuery = target.value;
   }
+  if (target.name === 'detailContent') {
+    updateDetailContent(target.value);
+  }
 }
 
-function isManagedInput(target: HTMLInputElement): boolean {
-  return ['sourceQuery', 'targetQuery', 'favoriteQuery'].includes(target.name);
+function isManagedTextControl(target: HTMLInputElement | HTMLTextAreaElement): boolean {
+  return ['sourceQuery', 'targetQuery', 'favoriteQuery', 'detailContent'].includes(target.name);
 }
 
-function renderPreservingInput(target: HTMLInputElement): void {
+function renderPreservingTextControl(target: HTMLInputElement | HTMLTextAreaElement): void {
   const name = target.name;
   const selectionStart = target.selectionStart;
   const selectionEnd = target.selectionEnd;
+  const scrollTop = target.scrollTop;
   const targetDocument = target.ownerDocument ?? getMountDocument();
+  const selector = target.tagName === 'TEXTAREA'
+    ? `#${ROOT_ID} textarea[name="${CSS.escape(name)}"]`
+    : `#${ROOT_ID} input[name="${CSS.escape(name)}"]`;
 
   render();
 
-  const replacement = targetDocument.querySelector<HTMLInputElement>(`#${ROOT_ID} input[name="${CSS.escape(name)}"]`);
+  const replacement = targetDocument.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector);
   if (!replacement) {
     return;
   }
 
   replacement.focus();
+  replacement.scrollTop = scrollTop;
   if (selectionStart !== null && selectionEnd !== null) {
     replacement.setSelectionRange(selectionStart, selectionEnd);
   }
@@ -1111,7 +1257,7 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
       closeManager();
       return;
     case 'refresh':
-      hydratePresetList();
+      hydratePresetList({ targetFromLoaded: true });
       state.notice = '已刷新预设列表';
       render();
       return;
@@ -1121,6 +1267,18 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
       return;
     case 'select-source':
     case 'select-target':
+      return;
+    case 'preset-copy':
+      await copySelectedPreset(getPresetPaneFromAction(element));
+      return;
+    case 'preset-rename':
+      await renameSelectedPreset(getPresetPaneFromAction(element));
+      return;
+    case 'preset-delete':
+      await deleteSelectedPreset(getPresetPaneFromAction(element));
+      return;
+    case 'source-remove':
+      removeSource(element.dataset.id ?? '');
       return;
     case 'copy-source':
       copySourceById(element.dataset.id ?? '');
@@ -1159,6 +1317,7 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
       await deleteFavorite(element.dataset.id ?? '');
       return;
     case 'reset-draft':
+      resetSourceDraft();
       resetTargetDraft();
       state.notice = '已放弃修改';
       render();
@@ -1178,10 +1337,215 @@ function closeManager(): void {
   }
 
   if (state.dirty) {
+    resetSourceDraft();
     resetTargetDraft();
   }
 
   state.isOpen = false;
+  render();
+}
+
+function getPresetPaneFromAction(element: HTMLElement): PresetPaneKind {
+  return element.dataset.presetPane === 'target' ? 'target' : 'source';
+}
+
+function getPresetNameForPane(kind: PresetPaneKind): string {
+  return kind === 'source' ? state.sourceName : state.targetName;
+}
+
+function getPresetDraftForPane(kind: PresetPaneKind): Preset | null {
+  return kind === 'source' ? getEditableSourceDraft() : state.targetDraft;
+}
+
+function setPresetNameForPane(kind: PresetPaneKind, name: string): void {
+  if (kind === 'source') {
+    state.sourceName = name;
+    saveLastSourceName();
+    return;
+  }
+  state.targetName = name;
+}
+
+function resetPresetDraftForPane(kind: PresetPaneKind): void {
+  if (kind === 'source') {
+    resetSourceDraft();
+    return;
+  }
+  resetTargetDraft();
+}
+
+async function copySelectedPreset(kind: PresetPaneKind): Promise<void> {
+  const sourceName = getPresetNameForPane(kind);
+  if (!ensurePresetFileActionAllowed(sourceName)) {
+    return;
+  }
+
+  const draft = getPresetDraftForPane(kind) ?? getPresetByName(sourceName);
+  if (!draft) {
+    setPresetActionError('当前预设不可复制');
+    return;
+  }
+
+  const nextName = promptPresetName('复制预设为', getAvailablePresetName(`${sourceName} 副本`));
+  if (!nextName) {
+    return;
+  }
+
+  try {
+    await persistPreset(nextName, draft, false);
+    setPresetNameForPane(kind, nextName);
+    hydratePresetList();
+    resetPresetDraftForPane(kind);
+    state.notice = `已复制预设：${nextName}`;
+    showToast('success', state.notice);
+    render();
+  } catch (error) {
+    setPresetActionError(error instanceof Error ? error.message : '复制预设失败');
+  }
+}
+
+async function renameSelectedPreset(kind: PresetPaneKind): Promise<void> {
+  const oldName = getPresetNameForPane(kind);
+  if (!ensurePresetFileActionAllowed(oldName)) {
+    return;
+  }
+
+  const nextName = promptPresetName('重命名预设为', oldName, oldName);
+  if (!nextName || nextName === oldName) {
+    return;
+  }
+
+  try {
+    const renamed = await helperRenamePreset(oldName, nextName);
+    if (!renamed) {
+      throw new Error('酒馆助手未能重命名该预设');
+    }
+
+    const sourceWasRenamed = state.sourceName === oldName;
+    const targetWasRenamed = state.targetName === oldName;
+    if (sourceWasRenamed) {
+      state.sourceName = nextName;
+      saveLastSourceName();
+    }
+    if (targetWasRenamed) {
+      state.targetName = nextName;
+    }
+    if (state.backedUpTargets[oldName]) {
+      state.backedUpTargets[nextName] = state.backedUpTargets[oldName];
+      delete state.backedUpTargets[oldName];
+    }
+
+    hydratePresetList();
+    state.notice = `已重命名预设：${nextName}`;
+    showToast('success', state.notice);
+    render();
+  } catch (error) {
+    setPresetActionError(error instanceof Error ? error.message : '重命名预设失败');
+  }
+}
+
+async function deleteSelectedPreset(kind: PresetPaneKind): Promise<void> {
+  const name = getPresetNameForPane(kind);
+  if (!ensurePresetFileActionAllowed(name)) {
+    return;
+  }
+
+  if (!window.confirm(`确认删除预设“${name}”？此操作会立即生效。`)) {
+    return;
+  }
+
+  try {
+    const deleted = await helperDeletePreset(name);
+    if (!deleted) {
+      throw new Error('酒馆助手未能删除该预设');
+    }
+
+    const remainingNames = state.presetNames.filter(presetName => presetName !== name);
+    const sourceWasDeleted = state.sourceName === name;
+    const targetWasDeleted = state.targetName === name;
+
+    if (sourceWasDeleted) {
+      state.sourceName = chooseFallbackPresetName(remainingNames, state.targetName);
+      state.sourceDraft = null;
+      state.sourceOriginal = null;
+      state.sourceDirty = false;
+      state.selectedSourceId = '';
+      saveLastSourceName();
+    }
+    if (targetWasDeleted) {
+      state.targetName = chooseFallbackPresetName(remainingNames, state.sourceName);
+      state.targetDraft = null;
+      state.targetOriginal = null;
+      state.targetDirty = false;
+      state.selectedTargetId = '';
+    }
+
+    syncDirtyState();
+    hydratePresetList();
+    state.notice = `已删除预设：${name}`;
+    showToast('success', state.notice);
+    render();
+  } catch (error) {
+    setPresetActionError(error instanceof Error ? error.message : '删除预设失败');
+  }
+}
+
+function ensurePresetFileActionAllowed(name: string): boolean {
+  if (!name || isFavoritesPreset(name)) {
+    setPresetActionError('收藏夹不是可复制、重命名或删除的磁盘预设');
+    return false;
+  }
+  if (name === 'in_use') {
+    setPresetActionError('不能直接操作 in_use 运行时预设');
+    return false;
+  }
+  return true;
+}
+
+function promptPresetName(title: string, defaultName: string, currentName = ''): string | null {
+  const value = window.prompt(title, defaultName);
+  if (value === null) {
+    return null;
+  }
+
+  const name = value.trim();
+  if (!name) {
+    setPresetActionError('预设名称不能为空');
+    return null;
+  }
+  if (name === 'in_use' || isFavoritesPreset(name)) {
+    setPresetActionError('这个名称不能作为普通预设使用');
+    return null;
+  }
+  if (name !== currentName && state.presetNames.includes(name)) {
+    setPresetActionError(`预设已存在：${name}`);
+    return null;
+  }
+  return name;
+}
+
+function getAvailablePresetName(baseName: string): string {
+  const base = baseName.trim() || '新预设副本';
+  if (!state.presetNames.includes(base)) {
+    return base;
+  }
+
+  let index = 2;
+  let nextName = `${base} ${index}`;
+  while (state.presetNames.includes(nextName)) {
+    index += 1;
+    nextName = `${base} ${index}`;
+  }
+  return nextName;
+}
+
+function chooseFallbackPresetName(names: string[], avoidName: string): string {
+  return names.find(name => name !== avoidName) ?? names[0] ?? FAVORITES_PRESET_VALUE;
+}
+
+function setPresetActionError(message: string): void {
+  state.error = message;
+  showToast('error', message);
   render();
 }
 
@@ -1190,15 +1554,19 @@ function selectRow(row: HTMLElement): void {
   const id = row.dataset.id ?? '';
   if (kind === 'source') {
     state.selectedSourceId = id;
+    state.selectedTargetId = '';
     state.activeTab = state.activeTab === 'preview' ? 'preview' : 'source';
   }
   if (kind === 'target') {
     state.selectedTargetId = id;
+    state.selectedSourceId = '';
     state.activeTab = state.activeTab === 'preview' ? 'preview' : 'target';
   }
   if (kind === 'favorite') {
     state.selectedFavoriteId = id;
-    state.activeTab = state.activeTab === 'preview' ? 'preview' : 'favorites';
+    state.selectedSourceId = '';
+    state.selectedTargetId = '';
+    state.activeTab = state.activeTab === 'preview' ? 'preview' : 'source';
   }
   render();
 }
@@ -1215,7 +1583,7 @@ function copySourceById(id: string): void {
   const selectedTargetIndex = targetEntries.findIndex(item => item.id === state.selectedTargetId);
   const insertIndex = selectedTargetIndex >= 0 ? selectedTargetIndex + 1 : undefined;
   state.selectedTargetId = insertPromptFromEntry(state.targetDraft, entry, insertIndex);
-  state.dirty = true;
+  markTargetDirty();
   state.notice = `已复制：${entry.name}`;
   state.activeTab = 'target';
   render();
@@ -1232,7 +1600,8 @@ async function favoriteEntryById(kind: 'source' | 'target', id: string): Promise
     return;
   }
 
-  state.favorites = [createFavoriteFromEntry(entry, kind === 'source' ? state.sourceName : state.targetName), ...state.favorites];
+  const sourcePreset = kind === 'source' ? getPresetDisplayName(state.sourceName) : getPresetDisplayName(state.targetName);
+  state.favorites = [createFavoriteFromEntry(entry, sourcePreset), ...state.favorites];
   await saveFavorites();
   state.notice = `已收藏：${entry.name}`;
   render();
@@ -1250,7 +1619,7 @@ function insertFavoriteById(id: string): void {
   const selectedTargetIndex = targetEntries.findIndex(item => item.id === state.selectedTargetId);
   const insertIndex = selectedTargetIndex >= 0 ? selectedTargetIndex + 1 : undefined;
   state.selectedTargetId = insertPromptFromEntry(state.targetDraft, favorite, insertIndex);
-  state.dirty = true;
+  markTargetDirty();
   state.notice = `已从收藏插入：${favorite.name}`;
   state.activeTab = 'target';
   render();
@@ -1262,7 +1631,21 @@ async function deleteFavorite(id: string): Promise<void> {
   if (state.favorites.length !== before) {
     await saveFavorites();
     state.notice = '已删除收藏';
+    if (isFavoritesPreset(state.targetName) && state.targetDraft && !state.targetDirty) {
+      resetTargetDraft();
+    }
   }
+  render();
+}
+
+function removeSource(id: string): void {
+  const sourceDraft = getEditableSourceDraft();
+  if (!sourceDraft) {
+    return;
+  }
+  removePrompt(sourceDraft, id);
+  state.selectedSourceId = '';
+  markSourceDirty();
   render();
 }
 
@@ -1272,7 +1655,7 @@ function toggleTarget(id: string): void {
     return;
   }
   setPromptEnabled(state.targetDraft, id, !entry.enabled);
-  state.dirty = true;
+  markTargetDirty();
   render();
 }
 
@@ -1281,7 +1664,7 @@ function moveTarget(id: string, direction: -1 | 1): void {
     return;
   }
   movePrompt(state.targetDraft, id, direction);
-  state.dirty = true;
+  markTargetDirty();
   render();
 }
 
@@ -1291,18 +1674,76 @@ function removeTarget(id: string): void {
   }
   removePrompt(state.targetDraft, id);
   state.selectedTargetId = '';
-  state.dirty = true;
+  markTargetDirty();
   render();
 }
 
+function updateDetailContent(content: string): void {
+  if (state.selectedSourceId) {
+    updateSourceContent(content);
+    return;
+  }
+  updateTargetContent(content);
+}
+
+function updateDetailRole(role: string): void {
+  if (state.selectedSourceId) {
+    updateSourceRole(role);
+    return;
+  }
+  updateTargetRole(role);
+}
+
+function updateSourceContent(content: string): void {
+  const sourceDraft = getEditableSourceDraft();
+  if (!sourceDraft || !state.selectedSourceId) {
+    return;
+  }
+  setPromptContent(sourceDraft, state.selectedSourceId, content);
+  markSourceDirty();
+}
+
+function updateSourceRole(role: string): void {
+  const sourceDraft = getEditableSourceDraft();
+  if (!sourceDraft || !state.selectedSourceId) {
+    return;
+  }
+  setPromptRole(sourceDraft, state.selectedSourceId, role);
+  markSourceDirty();
+}
+
+function updateTargetContent(content: string): void {
+  if (!state.targetDraft || !state.selectedTargetId) {
+    return;
+  }
+  setPromptContent(state.targetDraft, state.selectedTargetId, content);
+  markTargetDirty();
+}
+
+function updateTargetRole(role: string): void {
+  if (!state.targetDraft || !state.selectedTargetId) {
+    return;
+  }
+  setPromptRole(state.targetDraft, state.selectedTargetId, role);
+  markTargetDirty();
+}
+
 async function saveTargetDraft(): Promise<void> {
-  if (!state.targetDraft || !state.targetName || state.saving) {
+  if (state.saving) {
     return;
   }
 
-  const validation = validatePreset(state.targetDraft);
-  if (!validation.ok) {
+  const sourceValidation = state.sourceDirty && state.sourceDraft ? validatePreset(state.sourceDraft) : null;
+  const targetValidation = state.targetDirty && state.targetDraft ? validatePreset(state.targetDraft) : null;
+  if (sourceValidation && !sourceValidation.ok) {
+    state.error = '来源预设存在结构问题，请先处理重复 ID 或缺失引用';
+    showToast('error', state.error);
+    render();
+    return;
+  }
+  if (targetValidation && !targetValidation.ok) {
     state.error = '目标预设存在结构问题，请先处理重复 ID 或缺失引用';
+    showToast('error', state.error);
     render();
     return;
   }
@@ -1311,17 +1752,19 @@ async function saveTargetDraft(): Promise<void> {
   render();
 
   try {
-    if (state.targetOriginal && !state.backedUpTargets[state.targetName]) {
-      const backupName = `${state.targetName}.bak-preset-manager-${formatBackupTimestamp(new Date())}`;
-      const savedBackupName = await persistPreset(backupName, state.targetOriginal, false);
-      state.backedUpTargets[state.targetName] = savedBackupName;
+    const savedParts: string[] = [];
+    if (state.sourceDirty) {
+      await saveSourceDraft();
+      savedParts.push('来源');
     }
 
-    const savedName = await persistPreset(state.targetName, state.targetDraft, true);
-    state.targetName = savedName;
-    state.targetOriginal = deepClone(state.targetDraft);
-    state.dirty = false;
-    state.notice = `已保存预设。备份：${state.backedUpTargets[savedName] ?? state.backedUpTargets[state.targetName] ?? '本次未新建'}`;
+    if (state.targetDirty) {
+      await saveTargetOnly();
+      savedParts.push('目标');
+    }
+
+    syncDirtyState();
+    state.notice = savedParts.length ? `已保存${savedParts.join('、')}` : '没有需要保存的修改';
     showToast('success', state.notice);
   } catch (error) {
     state.error = error instanceof Error ? error.message : '保存失败';
@@ -1331,6 +1774,79 @@ async function saveTargetDraft(): Promise<void> {
     hydratePresetList();
     render();
   }
+}
+
+async function saveSourceDraft(): Promise<void> {
+  if (!state.sourceDraft || !state.sourceName) {
+    return;
+  }
+
+  if (isFavoritesPreset(state.sourceName)) {
+    await saveFavoritesFromDraft(state.sourceDraft);
+    state.sourceOriginal = deepClone(state.sourceDraft);
+    state.sourceDirty = false;
+    return;
+  }
+
+  if (state.sourceOriginal && !state.backedUpTargets[state.sourceName]) {
+    const backupName = `${state.sourceName}.bak-preset-manager-${formatBackupTimestamp(new Date())}`;
+    const savedBackupName = await persistPreset(backupName, state.sourceOriginal, false);
+    state.backedUpTargets[state.sourceName] = savedBackupName;
+  }
+
+  const savedName = await persistPreset(state.sourceName, state.sourceDraft, true);
+  state.sourceName = savedName;
+  state.sourceOriginal = deepClone(state.sourceDraft);
+  state.sourceDirty = false;
+}
+
+async function saveTargetOnly(): Promise<void> {
+  if (!state.targetDraft || !state.targetName) {
+    return;
+  }
+
+  if (isFavoritesPreset(state.targetName)) {
+    await saveFavoritesFromDraft(state.targetDraft);
+    state.targetOriginal = deepClone(state.targetDraft);
+    state.targetDirty = false;
+    return;
+  }
+
+  if (state.targetOriginal && !state.backedUpTargets[state.targetName]) {
+    const backupName = `${state.targetName}.bak-preset-manager-${formatBackupTimestamp(new Date())}`;
+    const savedBackupName = await persistPreset(backupName, state.targetOriginal, false);
+    state.backedUpTargets[state.targetName] = savedBackupName;
+  }
+
+  const savedName = await persistPreset(state.targetName, state.targetDraft, true);
+  state.targetName = savedName;
+  state.targetOriginal = deepClone(state.targetDraft);
+  state.targetDirty = false;
+}
+
+async function saveFavoritesFromDraft(draft: Preset): Promise<void> {
+  const previousById = new Map(state.favorites.map(favorite => [favorite.id, favorite]));
+  const sourceLabel = getPresetDisplayName(state.sourceName) || FAVORITES_PRESET_LABEL;
+  state.favorites = listPromptEntries(draft).map(entry => {
+    const previous = previousById.get(entry.id);
+    if (previous) {
+      return {
+        ...previous,
+        name: entry.name,
+        enabled: entry.enabled,
+        prompt: deepClone(entry.prompt),
+      };
+    }
+    return {
+      id: entry.id,
+      name: entry.name,
+      sourcePreset: sourceLabel,
+      createdAt: new Date().toISOString(),
+      enabled: entry.enabled,
+      prompt: deepClone(entry.prompt),
+    };
+  });
+  await saveFavorites();
 }
 
 async function persistPreset(name: string, preset: Preset, triggerUi: boolean): Promise<string> {
@@ -1561,12 +2077,21 @@ function onPointerCancel(event: PointerEvent): void {
 }
 
 function applyDrop(kind: EntryKind, id: string, clientX: number, clientY: number): void {
-  if (!state.targetDraft) {
+  const location = getDropLocation(clientX, clientY);
+  if (!location) {
     return;
   }
 
-  const location = getTargetDropLocation(clientX, clientY);
-  if (!location) {
+  if (location.zone === 'source') {
+    applySourceDrop(kind, id, location);
+    return;
+  }
+
+  applyTargetDrop(kind, id, location);
+}
+
+function applyTargetDrop(kind: EntryKind, id: string, location: DropLocation): void {
+  if (!state.targetDraft) {
     return;
   }
 
@@ -1594,36 +2119,92 @@ function applyDrop(kind: EntryKind, id: string, clientX: number, clientY: number
     state.notice = '已重排目标预设';
   }
 
-  state.dirty = true;
+  markTargetDirty();
   state.activeTab = 'target';
   render();
 }
 
-function getTargetDropLocation(clientX: number, clientY: number): DropLocation | null {
+function applySourceDrop(kind: EntryKind, id: string, location: DropLocation): void {
+  const sourceDraft = getEditableSourceDraft();
+  if (!sourceDraft) {
+    return;
+  }
+
+  if (kind === 'source') {
+    movePromptToIndex(sourceDraft, id, getAdjustedSourceMoveIndex(id, location.index));
+    state.selectedSourceId = id;
+    state.notice = '已重排来源预设';
+  }
+
+  if (kind === 'target') {
+    const targetEntry = getTargetEntries().find(entry => entry.id === id);
+    if (!targetEntry) {
+      return;
+    }
+    state.selectedSourceId = insertPromptFromEntry(sourceDraft, targetEntry, location.index);
+    state.notice = isFavoritesPreset(state.sourceName) ? `已拖入收藏夹：${targetEntry.name}` : `已拖入来源：${targetEntry.name}`;
+  }
+
+  if (kind === 'favorite') {
+    const favorite = state.favorites.find(entry => entry.id === id);
+    if (!favorite) {
+      return;
+    }
+    state.selectedSourceId = insertPromptFromEntry(sourceDraft, favorite, location.index);
+    state.notice = `已从收藏拖入：${favorite.name}`;
+  }
+
+  markSourceDirty();
+  state.activeTab = 'source';
+  render();
+}
+
+function getDropLocation(clientX: number, clientY: number): DropLocation | null {
   const target = getMountDocument().elementFromPoint(clientX, clientY);
-  const targetRow = target?.closest<HTMLElement>('.pm-row[data-entry-kind="target"]') ?? null;
-  const targetList = target?.closest<HTMLElement>('.pm-list[data-drop-zone="target"]') ?? null;
-  if (!targetRow && !targetList) {
+  const row = target?.closest<HTMLElement>('.pm-row[data-entry-kind="source"], .pm-row[data-entry-kind="target"]') ?? null;
+  const list = target?.closest<HTMLElement>('.pm-list[data-drop-zone="source"], .pm-list[data-drop-zone="target"]') ?? null;
+  const zone = getDropZone(row, list);
+  if (!zone) {
     return null;
   }
 
-  if (!targetRow) {
+  if (!row) {
     return {
-      index: state.targetDraft ? listPromptEntries(state.targetDraft).length : 0,
+      zone,
+      index: getDropZoneLength(zone),
       row: null,
     };
   }
 
   return {
-    index: getDropIndex(targetRow, clientY),
-    row: targetRow,
+    zone,
+    index: getDropIndex(row, clientY),
+    row,
   };
+}
+
+function getDropZone(row: HTMLElement | null, list: HTMLElement | null): 'source' | 'target' | null {
+  const rowKind = row?.dataset.entryKind;
+  if (rowKind === 'source' || rowKind === 'target') {
+    return rowKind;
+  }
+  const listZone = list?.dataset.dropZone;
+  return listZone === 'source' || listZone === 'target' ? listZone : null;
+}
+
+function getDropZoneLength(zone: 'source' | 'target'): number {
+  if (zone === 'source') {
+    const sourceDraft = getEditableSourceDraft();
+    return sourceDraft ? listPromptEntries(sourceDraft).length : 0;
+  }
+  return state.targetDraft ? listPromptEntries(state.targetDraft).length : 0;
 }
 
 function getDropIndex(row: HTMLElement, clientY: number): number {
   const rowIndex = Number(row.dataset.index);
   if (!Number.isFinite(rowIndex)) {
-    return state.targetDraft ? listPromptEntries(state.targetDraft).length : 0;
+    const kind = row.dataset.entryKind === 'source' ? 'source' : 'target';
+    return getDropZoneLength(kind);
   }
   const rect = row.getBoundingClientRect();
   return clientY > rect.top + rect.height / 2 ? rowIndex + 1 : rowIndex;
@@ -1637,9 +2218,18 @@ function getAdjustedMoveIndex(id: string, dropIndex: number): number {
   return currentIndex >= 0 && currentIndex < dropIndex ? dropIndex - 1 : dropIndex;
 }
 
+function getAdjustedSourceMoveIndex(id: string, dropIndex: number): number {
+  const sourceDraft = getEditableSourceDraft();
+  if (!sourceDraft) {
+    return dropIndex;
+  }
+  const currentIndex = listPromptEntries(sourceDraft).findIndex(entry => entry.id === id);
+  return currentIndex >= 0 && currentIndex < dropIndex ? dropIndex - 1 : dropIndex;
+}
+
 function updateDropMarker(clientX: number, clientY: number): void {
   clearDropMarkers();
-  const location = getTargetDropLocation(clientX, clientY);
+  const location = getDropLocation(clientX, clientY);
   if (!location?.row) {
     return;
   }

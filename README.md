@@ -11,7 +11,7 @@
 入口使用酒馆助手脚本自带的“预设缝合”按钮，不会在页面右下角额外创建浮动按钮：
 
 ```javascript
-import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v1.01/dist/preset-manager/index.js';
+import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v1.11/dist/preset-manager/index.js';
 ```
 
 本地开发时可以运行：

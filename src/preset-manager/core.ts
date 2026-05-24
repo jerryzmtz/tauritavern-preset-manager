@@ -416,6 +416,20 @@ export function setPromptEnabled(targetPreset: Preset, identifier: string, enabl
   entry.enabled = enabled;
 }
 
+export function setPromptContent(targetPreset: Preset, identifier: string, content: string): void {
+  const prompt = findPrompt(targetPreset, identifier);
+  if (prompt) {
+    prompt.content = content;
+  }
+}
+
+export function setPromptRole(targetPreset: Preset, identifier: string, role: string): void {
+  const prompt = findPrompt(targetPreset, identifier);
+  if (prompt) {
+    prompt.role = role || 'system';
+  }
+}
+
 export function validatePreset(preset: Preset): PresetValidation {
   const prompts = Array.isArray(preset.prompts) ? preset.prompts : [];
   const order = isRuntimePresetShape(preset) ? [] : getPrimaryPromptOrder(preset, false)?.order ?? [];
@@ -448,6 +462,11 @@ export function createFavoriteFromEntry(entry: PromptEntry, sourcePreset: string
 
 export function getContentLength(prompt: Prompt): number {
   return getPromptContent(prompt).length;
+}
+
+function findPrompt(targetPreset: Preset, identifier: string): Prompt | undefined {
+  const shaped = ensurePresetShape(targetPreset);
+  return (shaped.prompts ?? []).find(prompt => getPromptIdentifier(prompt) === identifier);
 }
 
 function getUniqueIdentifier(preset: Preset, preferred: string | undefined): string {
