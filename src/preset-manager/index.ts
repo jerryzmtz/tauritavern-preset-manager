@@ -25,7 +25,7 @@ import {
   listPromptEntries,
   materializePreset,
   movePrompt,
-  movePromptToIndex,
+  movePromptsToIndex,
   Preset,
   PromptEntry,
   removePrompt,
@@ -55,6 +55,7 @@ const VERSION_PREFERENCE_KEY = 'version-import-source';
 
 type MobileTab = 'source' | 'target' | 'preview';
 type EntryKind = 'source' | 'target' | 'favorite';
+type SelectableEntryKind = 'source' | 'target';
 type PresetPaneKind = 'source' | 'target';
 type FilterValue = 'all' | 'enabled' | 'disabled' | 'system' | 'user' | 'assistant';
 type DetailRole = 'system' | 'user' | 'assistant';
@@ -95,6 +96,7 @@ interface PointerDragState {
   pointerId: number;
   kind: EntryKind;
   id: string;
+  ids: string[];
   row: HTMLElement;
   startX: number;
   startY: number;
@@ -133,6 +135,10 @@ interface AppState {
   selectedSourceId: string;
   selectedTargetId: string;
   selectedFavoriteId: string;
+  sourceMultiSelect: boolean;
+  targetMultiSelect: boolean;
+  selectedSourceIds: string[];
+  selectedTargetIds: string[];
   sourceOriginal: Preset | null;
   sourceDraft: Preset | null;
   targetOriginal: Preset | null;
@@ -174,6 +180,10 @@ const state: AppState = {
   selectedSourceId: '',
   selectedTargetId: '',
   selectedFavoriteId: '',
+  sourceMultiSelect: false,
+  targetMultiSelect: false,
+  selectedSourceIds: [],
+  selectedTargetIds: [],
   sourceOriginal: null,
   sourceDraft: null,
   targetOriginal: null,
@@ -532,6 +542,7 @@ function resetSourceDraft(): void {
   state.sourceDraft = sourcePreset ? deepClone(sourcePreset) : null;
   state.sourceDirty = false;
   state.selectedSourceId = '';
+  clearEntrySelection('source');
   syncDirtyState();
 }
 
@@ -542,6 +553,7 @@ function resetTargetDraft(): void {
     state.targetDraft = favoritesDraft;
     state.targetDirty = false;
     state.selectedTargetId = '';
+    clearEntrySelection('target');
     syncDirtyState();
     return;
   }
@@ -551,6 +563,7 @@ function resetTargetDraft(): void {
   state.targetDraft = targetPreset ? deepClone(targetPreset) : null;
   state.targetDirty = false;
   state.selectedTargetId = '';
+  clearEntrySelection('target');
   syncDirtyState();
 }
 
@@ -877,6 +890,7 @@ function applyMobileSurfaces(root: HTMLElement): void {
 function renderDialog(): string {
   const sourceEntries = getSourceEntries();
   const targetEntries = getTargetEntries();
+  pruneEntrySelections();
   const selected = getDetailSelection();
   const validation = state.targetDraft ? validatePreset(state.targetDraft) : null;
 
@@ -1107,10 +1121,46 @@ function renderPresetPane(kind: 'source' | 'target', title: string, selectedPres
           </select>
         </label>
       </div>
+      ${renderEntrySelectionToolbar(kind, selectedPreset, entries)}
       <div class="pm-list" data-drop-zone="${kind}">
         ${entries.length ? entries.map((entry, index) => renderEntryRow(kind, entry, index)).join('') : renderEmpty(kind)}
       </div>
     </section>
+  `;
+}
+
+function renderEntrySelectionToolbar(kind: SelectableEntryKind, selectedPreset: string, entries: PromptEntry[]): string {
+  const enabled = isMultiSelectEnabled(kind);
+  const selectedCount = getSelectedEntryIds(kind).filter(id => entries.some(entry => entry.id === id)).length;
+  const hasRows = entries.length > 0;
+  const favoriteDisabled = selectedCount === 0 || isFavoritesPreset(selectedPreset) ? 'disabled' : '';
+  const deleteDisabled = selectedCount === 0 ? 'disabled' : '';
+  const activeClass = enabled ? 'is-active' : '';
+  const pressed = enabled ? 'true' : 'false';
+
+  return `
+    <div class="pm-entry-selection-toolbar ${activeClass}" data-entry-selection-kind="${kind}">
+      <button class="pm-selection-mode-button" type="button" data-action="entry-multi-toggle" data-entry-kind="${kind}" aria-pressed="${pressed}" ${hasRows ? '' : 'disabled'}>
+        <i class="fa-solid fa-list-check" aria-hidden="true"></i>
+        <span>条目多选</span>
+      </button>
+      ${enabled ? `
+        <button class="pm-selection-action" type="button" data-action="entry-select-all" data-entry-kind="${kind}" ${hasRows ? '' : 'disabled'}>
+          全选
+        </button>
+        <button class="pm-selection-action" type="button" data-action="entry-clear-selection" data-entry-kind="${kind}" ${selectedCount ? '' : 'disabled'}>
+          清空
+        </button>
+        <button class="pm-selection-action" type="button" data-action="entry-batch-favorite" data-entry-kind="${kind}" title="${isFavoritesPreset(selectedPreset) ? '收藏夹里的条目已是收藏' : '收藏选中条目'}" ${favoriteDisabled}>
+          <i class="fa-regular fa-star" aria-hidden="true"></i>
+          收藏
+        </button>
+        <button class="pm-selection-action pm-danger" type="button" data-action="entry-batch-delete" data-entry-kind="${kind}" ${deleteDisabled}>
+          <i class="fa-solid fa-trash" aria-hidden="true"></i>
+          删除
+        </button>
+      ` : ''}
+    </div>
   `;
 }
 
@@ -1158,13 +1208,18 @@ function renderFilterOptions(active: FilterValue): string {
 function renderEntryRow(kind: 'source' | 'target', entry: PromptEntry, index: number): string {
   const selectedId = kind === 'source' ? state.selectedSourceId : state.selectedTargetId;
   const selected = selectedId === entry.id ? 'is-selected' : '';
+  const multiSelectEnabled = isMultiSelectEnabled(kind);
+  const multiSelected = isEntrySelected(kind, entry.id);
+  const multiClass = multiSelectEnabled ? 'has-multi-select' : '';
+  const multiSelectedClass = multiSelected ? 'is-multi-selected' : '';
   const enabled = entry.enabled ? '启用' : '禁用';
   const contentLength = entry.content.length;
   const actions = renderRowActions(kind, entry);
 
   return `
-    <div class="pm-row ${selected}" role="button" tabindex="0" data-entry-kind="${kind}" data-id="${escapeAttr(entry.id)}" data-index="${index}">
+    <div class="pm-row ${selected} ${multiClass} ${multiSelectedClass}" role="button" tabindex="0" data-entry-kind="${kind}" data-id="${escapeAttr(entry.id)}" data-index="${index}" draggable="true">
       <div class="pm-row-grip" data-drag-handle="true" aria-hidden="true" title="拖拽条目"><i class="fa-solid fa-grip-lines"></i></div>
+      ${multiSelectEnabled ? renderEntrySelectionButton(kind, entry, multiSelected) : ''}
       <div class="pm-row-main">
         <div class="pm-row-title">${escapeHtml(entry.name)}</div>
         <div class="pm-row-meta">
@@ -1175,6 +1230,16 @@ function renderEntryRow(kind: 'source' | 'target', entry: PromptEntry, index: nu
       </div>
       <div class="pm-row-actions">${actions}</div>
     </div>
+  `;
+}
+
+function renderEntrySelectionButton(kind: SelectableEntryKind, entry: PromptEntry, selected: boolean): string {
+  const title = selected ? '取消选择条目' : '选择条目';
+  const icon = selected ? 'fa-square-check' : 'fa-square';
+  return `
+    <button class="pm-row-select" type="button" data-action="entry-select-toggle" data-entry-kind="${kind}" data-id="${escapeAttr(entry.id)}" aria-pressed="${selected ? 'true' : 'false'}" title="${title}" aria-label="${title}">
+      <i class="fa-regular ${icon}" aria-hidden="true"></i>
+    </button>
   `;
 }
 
@@ -1377,6 +1442,123 @@ function getDetailSelection(): DetailSelection | null {
   }
   const source = getSourceEntries().find(entry => entry.id === state.selectedSourceId);
   return source ? { kind: 'source', entry: source } : null;
+}
+
+function getEntriesForKind(kind: SelectableEntryKind): PromptEntry[] {
+  return kind === 'source' ? getSourceEntries() : getTargetEntries();
+}
+
+function isMultiSelectEnabled(kind: SelectableEntryKind): boolean {
+  return kind === 'source' ? state.sourceMultiSelect : state.targetMultiSelect;
+}
+
+function setMultiSelectEnabled(kind: SelectableEntryKind, enabled: boolean): void {
+  if (kind === 'source') {
+    state.sourceMultiSelect = enabled;
+  } else {
+    state.targetMultiSelect = enabled;
+  }
+  if (!enabled) {
+    clearEntrySelection(kind);
+  }
+}
+
+function toggleMultiSelect(kind: SelectableEntryKind): void {
+  setMultiSelectEnabled(kind, !isMultiSelectEnabled(kind));
+  render();
+}
+
+function getSelectedEntryIds(kind: SelectableEntryKind): string[] {
+  return kind === 'source' ? state.selectedSourceIds : state.selectedTargetIds;
+}
+
+function setSelectedEntryIds(kind: SelectableEntryKind, ids: string[]): void {
+  const availableIds = new Set(getEntriesForKind(kind).map(entry => entry.id));
+  const nextIds = dedupeStrings(ids).filter(id => availableIds.has(id));
+  if (kind === 'source') {
+    state.selectedSourceIds = nextIds;
+  } else {
+    state.selectedTargetIds = nextIds;
+  }
+}
+
+function clearEntrySelection(kind: SelectableEntryKind): void {
+  if (kind === 'source') {
+    state.selectedSourceIds = [];
+  } else {
+    state.selectedTargetIds = [];
+  }
+}
+
+function pruneEntrySelections(): void {
+  setSelectedEntryIds('source', state.selectedSourceIds);
+  setSelectedEntryIds('target', state.selectedTargetIds);
+}
+
+function isEntrySelected(kind: SelectableEntryKind, id: string): boolean {
+  return getSelectedEntryIds(kind).includes(id);
+}
+
+function toggleEntrySelection(kind: SelectableEntryKind, id: string): void {
+  const selectedIds = getSelectedEntryIds(kind);
+  const nextIds = selectedIds.includes(id)
+    ? selectedIds.filter(selectedId => selectedId !== id)
+    : [...selectedIds, id];
+  setSelectedEntryIds(kind, nextIds);
+  if (kind === 'source') {
+    state.selectedSourceId = id;
+    state.selectedTargetId = '';
+  } else {
+    state.selectedTargetId = id;
+    state.selectedSourceId = '';
+  }
+}
+
+function toggleEntrySelectionFromAction(element: HTMLElement): void {
+  const kind = getEntryKindFromAction(element);
+  toggleEntrySelection(kind, element.dataset.id ?? '');
+  render();
+}
+
+function selectAllVisibleEntries(kind: SelectableEntryKind): void {
+  const visibleIds = getVisibleEntriesForKind(kind).map(entry => entry.id);
+  setSelectedEntryIds(kind, visibleIds);
+  render();
+}
+
+function getVisibleEntriesForKind(kind: SelectableEntryKind): PromptEntry[] {
+  return kind === 'source'
+    ? filterEntries(getSourceEntries(), state.sourceQuery, state.sourceFilter)
+    : filterEntries(getTargetEntries(), state.targetQuery, state.targetFilter);
+}
+
+function getSelectedEntries(kind: SelectableEntryKind): PromptEntry[] {
+  const selectedIds = new Set(getSelectedEntryIds(kind));
+  return getEntriesForKind(kind).filter(entry => selectedIds.has(entry.id));
+}
+
+function getDragEntryIds(kind: EntryKind, id: string): string[] {
+  if (kind !== 'source' && kind !== 'target') {
+    return [id];
+  }
+  const selectedIds = getSelectedEntryIds(kind);
+  if (isMultiSelectEnabled(kind) && selectedIds.includes(id)) {
+    return getEntriesForKind(kind)
+      .map(entry => entry.id)
+      .filter(entryId => selectedIds.includes(entryId));
+  }
+  return [id];
+}
+
+function dedupeStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  return values.filter(value => {
+    if (!value || seen.has(value)) {
+      return false;
+    }
+    seen.add(value);
+    return true;
+  });
 }
 
 function onRootClick(event: MouseEvent): void {
@@ -1604,6 +1786,25 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
       return;
     case 'preset-delete':
       await deleteSelectedPreset(getPresetPaneFromAction(element));
+      return;
+    case 'entry-multi-toggle':
+      toggleMultiSelect(getEntryKindFromAction(element));
+      return;
+    case 'entry-select-toggle':
+      toggleEntrySelectionFromAction(element);
+      return;
+    case 'entry-select-all':
+      selectAllVisibleEntries(getEntryKindFromAction(element));
+      return;
+    case 'entry-clear-selection':
+      clearEntrySelection(getEntryKindFromAction(element));
+      render();
+      return;
+    case 'entry-batch-favorite':
+      await favoriteSelectedEntries(getEntryKindFromAction(element));
+      return;
+    case 'entry-batch-delete':
+      removeSelectedEntries(getEntryKindFromAction(element));
       return;
     case 'source-remove':
       removeSource(element.dataset.id ?? '');
@@ -1884,6 +2085,10 @@ function getPresetPaneFromAction(element: HTMLElement): PresetPaneKind {
   return element.dataset.presetPane === 'target' ? 'target' : 'source';
 }
 
+function getEntryKindFromAction(element: HTMLElement): SelectableEntryKind {
+  return element.dataset.entryKind === 'target' ? 'target' : 'source';
+}
+
 function getPresetNameForPane(kind: PresetPaneKind): string {
   return kind === 'source' ? state.sourceName : state.targetName;
 }
@@ -2087,6 +2292,12 @@ function setPresetActionError(message: string): void {
 function selectRow(row: HTMLElement): void {
   const kind = row.dataset.entryKind as EntryKind | undefined;
   const id = row.dataset.id ?? '';
+  if ((kind === 'source' || kind === 'target') && isMultiSelectEnabled(kind)) {
+    toggleEntrySelection(kind, id);
+    state.activeTab = state.activeTab === 'preview' ? 'preview' : kind;
+    render();
+    return;
+  }
   if (kind === 'source') {
     state.selectedSourceId = id;
     state.selectedTargetId = '';
@@ -2139,6 +2350,31 @@ async function favoriteEntryById(kind: 'source' | 'target', id: string): Promise
   state.favorites = [createFavoriteFromEntry(entry, sourcePreset), ...state.favorites];
   await saveFavorites();
   state.notice = `已收藏：${entry.name}`;
+  render();
+}
+
+async function favoriteSelectedEntries(kind: SelectableEntryKind): Promise<void> {
+  if (isFavoritesPreset(getPresetNameForPane(kind))) {
+    state.error = '收藏夹里的条目已是收藏';
+    render();
+    return;
+  }
+
+  const entries = getSelectedEntries(kind);
+  if (!entries.length) {
+    state.error = '没有选中的条目';
+    render();
+    return;
+  }
+
+  const sourcePreset = getPresetDisplayName(getPresetNameForPane(kind));
+  state.favorites = [
+    ...entries.map(entry => createFavoriteFromEntry(entry, sourcePreset)),
+    ...state.favorites,
+  ];
+  await saveFavorites();
+  state.notice = `已收藏 ${entries.length} 个条目`;
+  showToast('success', state.notice);
   render();
 }
 
@@ -2210,6 +2446,42 @@ function removeTarget(id: string): void {
   removePrompt(state.targetDraft, id);
   state.selectedTargetId = '';
   markTargetDirty();
+  render();
+}
+
+function removeSelectedEntries(kind: SelectableEntryKind): void {
+  const entries = getSelectedEntries(kind);
+  if (!entries.length) {
+    state.error = '没有选中的条目';
+    render();
+    return;
+  }
+
+  const draft = kind === 'source' ? getEditableSourceDraft() : state.targetDraft;
+  if (!draft) {
+    return;
+  }
+
+  const selectedIds = new Set(entries.map(entry => entry.id));
+  for (const id of selectedIds) {
+    removePrompt(draft, id);
+  }
+
+  if (kind === 'source') {
+    if (selectedIds.has(state.selectedSourceId)) {
+      state.selectedSourceId = '';
+    }
+    clearEntrySelection('source');
+    markSourceDirty();
+  } else {
+    if (selectedIds.has(state.selectedTargetId)) {
+      state.selectedTargetId = '';
+    }
+    clearEntrySelection('target');
+    markTargetDirty();
+  }
+
+  state.notice = `已删除 ${selectedIds.size} 个条目`;
   render();
 }
 
@@ -2497,8 +2769,9 @@ function onDragStart(event: DragEvent): void {
     return;
   }
 
+  const ids = getDragEntryIds(kind as EntryKind, id);
   event.dataTransfer.effectAllowed = 'copyMove';
-  event.dataTransfer.setData('application/x-preset-manager', JSON.stringify({ kind, id }));
+  event.dataTransfer.setData('application/x-preset-manager', JSON.stringify({ kind, id, ids }));
 }
 
 function onDragOver(event: DragEvent): void {
@@ -2517,12 +2790,12 @@ function onDrop(event: DragEvent): void {
     return;
   }
 
-  const payload = JSON.parse(raw) as { kind?: EntryKind; id?: string };
+  const payload = JSON.parse(raw) as { kind?: EntryKind; id?: string; ids?: string[] };
   if (!payload.kind || !payload.id) {
     return;
   }
 
-  applyDrop(payload.kind, payload.id, event.clientX, event.clientY);
+  applyDrop(payload.kind, normalizeDragIds(payload), event.clientX, event.clientY);
 }
 
 function onPointerDown(event: PointerEvent): void {
@@ -2555,6 +2828,7 @@ function onPointerDown(event: PointerEvent): void {
     pointerId: event.pointerId,
     kind,
     id,
+    ids: getDragEntryIds(kind, id),
     row,
     startX: event.clientX,
     startY: event.clientY,
@@ -2604,7 +2878,7 @@ function onPointerUp(event: PointerEvent): void {
 
   suppressNextClick = true;
   event.preventDefault();
-  applyDrop(drag.kind, drag.id, event.clientX, event.clientY);
+  applyDrop(drag.kind, drag.ids, event.clientX, event.clientY);
 }
 
 function onPointerCancel(event: PointerEvent): void {
@@ -2618,47 +2892,53 @@ function onPointerCancel(event: PointerEvent): void {
   clearDropMarkers();
 }
 
-function applyDrop(kind: EntryKind, id: string, clientX: number, clientY: number): void {
+function normalizeDragIds(payload: { id?: string; ids?: string[] }): string[] {
+  return dedupeStrings(Array.isArray(payload.ids) && payload.ids.length ? payload.ids : [payload.id ?? '']);
+}
+
+function applyDrop(kind: EntryKind, ids: string[], clientX: number, clientY: number): void {
   const location = getDropLocation(clientX, clientY);
-  if (!location) {
+  if (!location || !ids.length) {
     return;
   }
 
   if (location.zone === 'source') {
-    applySourceDrop(kind, id, location);
+    applySourceDrop(kind, ids, location);
     return;
   }
 
-  applyTargetDrop(kind, id, location);
+  applyTargetDrop(kind, ids, location);
 }
 
-function applyTargetDrop(kind: EntryKind, id: string, location: DropLocation): void {
+function applyTargetDrop(kind: EntryKind, ids: string[], location: DropLocation): void {
   if (!state.targetDraft) {
     return;
   }
 
   if (kind === 'source') {
-    const sourceEntry = getSourceEntries().find(entry => entry.id === id);
-    if (!sourceEntry) {
+    const sourceEntries = getEntriesByIds(getSourceEntries(), ids);
+    if (!sourceEntries.length) {
       return;
     }
-    state.selectedTargetId = insertPromptFromEntry(state.targetDraft, sourceEntry, location.index);
-    state.notice = `已拖入：${sourceEntry.name}`;
+    const insertedIds = insertEntriesAtIndex(state.targetDraft, sourceEntries, location.index);
+    selectDroppedEntries('target', insertedIds);
+    state.notice = sourceEntries.length === 1 ? `已拖入：${sourceEntries[0].name}` : `已拖入 ${sourceEntries.length} 个条目`;
   }
 
   if (kind === 'favorite') {
-    const favorite = state.favorites.find(entry => entry.id === id);
-    if (!favorite) {
+    const favorites = getFavoritesByIds(ids);
+    if (!favorites.length) {
       return;
     }
-    state.selectedTargetId = insertPromptFromEntry(state.targetDraft, favorite, location.index);
-    state.notice = `已从收藏拖入：${favorite.name}`;
+    const insertedIds = insertEntriesAtIndex(state.targetDraft, favorites, location.index);
+    selectDroppedEntries('target', insertedIds);
+    state.notice = favorites.length === 1 ? `已从收藏拖入：${favorites[0].name}` : `已从收藏拖入 ${favorites.length} 个条目`;
   }
 
   if (kind === 'target') {
-    movePromptToIndex(state.targetDraft, id, getAdjustedMoveIndex(id, location.index));
-    state.selectedTargetId = id;
-    state.notice = '已重排目标预设';
+    movePromptsToIndex(state.targetDraft, ids, location.index);
+    selectDroppedEntries('target', ids);
+    state.notice = ids.length === 1 ? '已重排目标预设' : `已重排 ${ids.length} 个目标条目`;
   }
 
   markTargetDirty();
@@ -2666,39 +2946,81 @@ function applyTargetDrop(kind: EntryKind, id: string, location: DropLocation): v
   render();
 }
 
-function applySourceDrop(kind: EntryKind, id: string, location: DropLocation): void {
+function applySourceDrop(kind: EntryKind, ids: string[], location: DropLocation): void {
   const sourceDraft = getEditableSourceDraft();
   if (!sourceDraft) {
     return;
   }
 
   if (kind === 'source') {
-    movePromptToIndex(sourceDraft, id, getAdjustedSourceMoveIndex(id, location.index));
-    state.selectedSourceId = id;
-    state.notice = '已重排来源预设';
+    movePromptsToIndex(sourceDraft, ids, location.index);
+    selectDroppedEntries('source', ids);
+    state.notice = ids.length === 1 ? '已重排来源预设' : `已重排 ${ids.length} 个来源条目`;
   }
 
   if (kind === 'target') {
-    const targetEntry = getTargetEntries().find(entry => entry.id === id);
-    if (!targetEntry) {
+    const targetEntries = getEntriesByIds(getTargetEntries(), ids);
+    if (!targetEntries.length) {
       return;
     }
-    state.selectedSourceId = insertPromptFromEntry(sourceDraft, targetEntry, location.index);
-    state.notice = isFavoritesPreset(state.sourceName) ? `已拖入收藏夹：${targetEntry.name}` : `已拖入来源：${targetEntry.name}`;
+    const insertedIds = insertEntriesAtIndex(sourceDraft, targetEntries, location.index);
+    selectDroppedEntries('source', insertedIds);
+    state.notice = isFavoritesPreset(state.sourceName)
+      ? (targetEntries.length === 1 ? `已拖入收藏夹：${targetEntries[0].name}` : `已拖入收藏夹 ${targetEntries.length} 个条目`)
+      : (targetEntries.length === 1 ? `已拖入来源：${targetEntries[0].name}` : `已拖入来源 ${targetEntries.length} 个条目`);
   }
 
   if (kind === 'favorite') {
-    const favorite = state.favorites.find(entry => entry.id === id);
-    if (!favorite) {
+    const favorites = getFavoritesByIds(ids);
+    if (!favorites.length) {
       return;
     }
-    state.selectedSourceId = insertPromptFromEntry(sourceDraft, favorite, location.index);
-    state.notice = `已从收藏拖入：${favorite.name}`;
+    const insertedIds = insertEntriesAtIndex(sourceDraft, favorites, location.index);
+    selectDroppedEntries('source', insertedIds);
+    state.notice = favorites.length === 1 ? `已从收藏拖入：${favorites[0].name}` : `已从收藏拖入 ${favorites.length} 个条目`;
   }
 
   markSourceDirty();
   state.activeTab = 'source';
   render();
+}
+
+function getEntriesByIds(entries: PromptEntry[], ids: string[]): PromptEntry[] {
+  const selectedIds = new Set(ids);
+  return entries.filter(entry => selectedIds.has(entry.id));
+}
+
+function getFavoritesByIds(ids: string[]): FavoriteEntry[] {
+  const selectedIds = new Set(ids);
+  return state.favorites.filter(entry => selectedIds.has(entry.id));
+}
+
+function insertEntriesAtIndex(targetPreset: Preset, entries: Array<PromptEntry | FavoriteEntry>, index: number): string[] {
+  const insertedIds: string[] = [];
+  entries.forEach((entry, offset) => {
+    insertedIds.push(insertPromptFromEntry(targetPreset, entry, index + offset));
+  });
+  return insertedIds;
+}
+
+function selectDroppedEntries(kind: SelectableEntryKind, ids: string[]): void {
+  const nextIds = dedupeStrings(ids);
+  if (kind === 'source') {
+    state.selectedSourceId = nextIds[0] ?? '';
+    state.selectedTargetId = '';
+    if (nextIds.length > 1) {
+      state.sourceMultiSelect = true;
+      setSelectedEntryIds('source', nextIds);
+    }
+    return;
+  }
+
+  state.selectedTargetId = nextIds[0] ?? '';
+  state.selectedSourceId = '';
+  if (nextIds.length > 1) {
+    state.targetMultiSelect = true;
+    setSelectedEntryIds('target', nextIds);
+  }
 }
 
 function getDropLocation(clientX: number, clientY: number): DropLocation | null {
@@ -2750,23 +3072,6 @@ function getDropIndex(row: HTMLElement, clientY: number): number {
   }
   const rect = row.getBoundingClientRect();
   return clientY > rect.top + rect.height / 2 ? rowIndex + 1 : rowIndex;
-}
-
-function getAdjustedMoveIndex(id: string, dropIndex: number): number {
-  if (!state.targetDraft) {
-    return dropIndex;
-  }
-  const currentIndex = listPromptEntries(state.targetDraft).findIndex(entry => entry.id === id);
-  return currentIndex >= 0 && currentIndex < dropIndex ? dropIndex - 1 : dropIndex;
-}
-
-function getAdjustedSourceMoveIndex(id: string, dropIndex: number): number {
-  const sourceDraft = getEditableSourceDraft();
-  if (!sourceDraft) {
-    return dropIndex;
-  }
-  const currentIndex = listPromptEntries(sourceDraft).findIndex(entry => entry.id === id);
-  return currentIndex >= 0 && currentIndex < dropIndex ? dropIndex - 1 : dropIndex;
 }
 
 function updateDropMarker(clientX: number, clientY: number): void {

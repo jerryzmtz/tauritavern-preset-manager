@@ -397,6 +397,44 @@ export function movePromptToIndex(targetPreset: Preset, identifier: string, next
   order.splice(normalizeInsertIndex(nextIndex, order.length), 0, entry);
 }
 
+export function movePromptsToIndex(targetPreset: Preset, identifiers: string[], nextIndex: number): void {
+  const shaped = ensurePresetShape(targetPreset);
+  const movingIds = new Set(dedupeIdentifiers(identifiers));
+  if (!movingIds.size) {
+    return;
+  }
+
+  if (isRuntimePresetShape(shaped)) {
+    const prompts = shaped.prompts ?? [];
+    const normalizedIndex = normalizeInsertIndex(nextIndex, prompts.length);
+    const moving = prompts.filter(prompt => movingIds.has(getPromptIdentifier(prompt)));
+    if (!moving.length) {
+      return;
+    }
+    const selectedBeforeDrop = prompts.slice(0, normalizedIndex)
+      .filter(prompt => movingIds.has(getPromptIdentifier(prompt))).length;
+    const remaining = prompts.filter(prompt => !movingIds.has(getPromptIdentifier(prompt)));
+    const insertIndex = normalizeInsertIndex(normalizedIndex - selectedBeforeDrop, remaining.length);
+    shaped.prompts = [
+      ...remaining.slice(0, insertIndex),
+      ...moving,
+      ...remaining.slice(insertIndex),
+    ];
+    return;
+  }
+
+  const order = getPrimaryPromptOrder(shaped, true)?.order ?? [];
+  const normalizedIndex = normalizeInsertIndex(nextIndex, order.length);
+  const moving = order.filter(entry => movingIds.has(entry.identifier));
+  if (!moving.length) {
+    return;
+  }
+  const selectedBeforeDrop = order.slice(0, normalizedIndex).filter(entry => movingIds.has(entry.identifier)).length;
+  const remaining = order.filter(entry => !movingIds.has(entry.identifier));
+  const insertIndex = normalizeInsertIndex(normalizedIndex - selectedBeforeDrop, remaining.length);
+  order.splice(0, order.length, ...remaining.slice(0, insertIndex), ...moving, ...remaining.slice(insertIndex));
+}
+
 export function setPromptEnabled(targetPreset: Preset, identifier: string, enabled: boolean): void {
   const shaped = ensurePresetShape(targetPreset);
   if (isRuntimePresetShape(shaped)) {
@@ -481,6 +519,17 @@ function getUniqueIdentifier(preset: Preset, preferred: string | undefined): str
     id = createId();
   }
   return id;
+}
+
+function dedupeIdentifiers(identifiers: string[]): string[] {
+  const seen = new Set<string>();
+  return identifiers.filter(identifier => {
+    if (!identifier || seen.has(identifier)) {
+      return false;
+    }
+    seen.add(identifier);
+    return true;
+  });
 }
 
 function normalizeInsertIndex(index: number | undefined, length: number): number {

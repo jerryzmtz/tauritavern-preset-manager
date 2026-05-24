@@ -188,7 +188,7 @@ function serveFixture() {
         enabled: true,
         name: '预设缝合管理器',
         id: 'preset-manager-script-id',
-        content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v1.30/dist/preset-manager/index.js';",
+        content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v1.31/dist/preset-manager/index.js';",
         info: '',
         button: { enabled: true, buttons: [] },
         data: {},
@@ -406,7 +406,7 @@ function serveFixture() {
           enabled: true,
           name: '预设缝合管理器',
           id: 'zero-frame-script-id',
-          content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v1.30/dist/preset-manager/index.js';",
+          content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v1.31/dist/preset-manager/index.js';",
           info: '',
           button: { enabled: true, buttons: [] },
           data: {},
@@ -732,6 +732,87 @@ async function verifySourceDetailEditing(page, fixture, viewportName) {
   await page.waitForFunction(() => document.querySelector('textarea[name="detailContent"]')?.value !== '来源条目的详情编辑只停留在页面草稿里');
 }
 
+async function verifyMultiSelectOperations(page, fixture, viewportName) {
+  await page.locator('select[name="sourceName"]').selectOption('雪月agent_v1（自改）');
+  await page.locator('select[name="targetName"]').selectOption('夏瑾二改（自用）');
+  fixture.clearSavedPreset();
+
+  const sourceRows = page.locator('.pm-pane-source .pm-row');
+  const targetRows = page.locator('.pm-pane-target .pm-row');
+  const selectedSourceTitles = await sourceRows.evaluateAll(nodes => nodes.slice(0, 2).map(node => node.querySelector('.pm-row-title')?.textContent?.trim()));
+  if (selectedSourceTitles.length < 2 || selectedSourceTitles.some(title => !title)) {
+    throw new Error(`${viewportName}: 来源列表条目不足，无法验证多选`);
+  }
+
+  const sourcePresetActionsBefore = await page.locator('.pm-pane-source .pm-preset-action').count();
+  await page.locator('.pm-pane-source [data-action="entry-multi-toggle"]').click();
+  const sourcePresetActionsAfter = await page.locator('.pm-pane-source .pm-preset-action').count();
+  if (sourcePresetActionsBefore !== 3 || sourcePresetActionsAfter !== 3) {
+    throw new Error(`${viewportName}: 条目多选操作混入了预设级操作区`);
+  }
+  if (await page.locator('.pm-pane-source .pm-entry-selection-toolbar.is-active').count() !== 1) {
+    throw new Error(`${viewportName}: 条目多选没有使用独立工具条`);
+  }
+
+  await sourceRows.nth(0).locator('.pm-row-select').click();
+  await sourceRows.nth(1).locator('.pm-row-select').click();
+  if (await page.locator('.pm-pane-source .pm-selection-count').count()) {
+    throw new Error(`${viewportName}: 多选工具条不应显示已选条数`);
+  }
+  const toolbarLabels = await page.locator('.pm-pane-source .pm-selection-action').evaluateAll(nodes => nodes.map(node => node.textContent?.trim()));
+  if (!toolbarLabels.includes('收藏') || !toolbarLabels.includes('删除') || toolbarLabels.some(label => label?.includes('选中'))) {
+    throw new Error(`${viewportName}: 批量收藏和删除按钮文案应保持精简`);
+  }
+
+  const favoritesBefore = await page.evaluate(() => JSON.parse(localStorage.getItem('preset-manager:favorites:v1') ?? '[]').length);
+  await page.locator('.pm-pane-source [data-action="entry-batch-favorite"]').click();
+  await page.waitForFunction(count => JSON.parse(localStorage.getItem('preset-manager:favorites:v1') ?? '[]').length === count + 2, favoritesBefore);
+  if (fixture.getSavedPreset() !== null) {
+    throw new Error(`${viewportName}: 批量收藏不应调用预设保存接口`);
+  }
+
+  const targetCountBeforeDrag = await targetRows.count();
+  await dragBetween(
+    page,
+    sourceRows.first().locator('.pm-row-grip'),
+    page.locator('.pm-pane-target .pm-list'),
+    'end',
+  );
+  await page.waitForFunction(count => document.querySelectorAll('.pm-pane-target .pm-row').length === count + 2, targetCountBeforeDrag);
+  const targetTitlesAfterDrag = await page.locator('.pm-pane-target .pm-row-title').evaluateAll(nodes => nodes.map(node => node.textContent?.trim()));
+  const insertedAt = targetTitlesAfterDrag.findIndex(title => title === selectedSourceTitles[0]);
+  if (insertedAt < 0 || targetTitlesAfterDrag[insertedAt + 1] !== selectedSourceTitles[1]) {
+    throw new Error(`${viewportName}: 多选拖拽没有按来源顺序插入目标预设`);
+  }
+  const targetSelectedTitlesAfterDrag = await page.locator('.pm-pane-target .pm-row.is-multi-selected .pm-row-title').evaluateAll(nodes => nodes.map(node => node.textContent?.trim()));
+  for (const title of selectedSourceTitles) {
+    if (!targetSelectedTitlesAfterDrag.includes(title)) {
+      throw new Error(`${viewportName}: 多选拖拽后目标预设没有高亮整组选中条目`);
+    }
+  }
+  if (fixture.getSavedPreset() !== null) {
+    throw new Error(`${viewportName}: 多选拖拽不应调用预设保存接口`);
+  }
+
+  await page.getByRole('button', { name: '放弃修改' }).click();
+  await page.waitForFunction(count => document.querySelectorAll('.pm-pane-target .pm-row').length === count, targetCountBeforeDrag);
+
+  if (await page.locator('.pm-pane-target .pm-row-select').count() === 0) {
+    await page.locator('.pm-pane-target [data-action="entry-multi-toggle"]').click();
+  }
+  const targetCountBeforeDelete = await targetRows.count();
+  await targetRows.nth(0).locator('.pm-row-select').click();
+  await targetRows.nth(1).locator('.pm-row-select').click();
+  await page.locator('.pm-pane-target [data-action="entry-batch-delete"]').click();
+  await page.waitForFunction(count => document.querySelectorAll('.pm-pane-target .pm-row').length === count - 2, targetCountBeforeDelete);
+  if (fixture.getSavedPreset() !== null) {
+    throw new Error(`${viewportName}: 批量删除不应在点击保存前调用保存接口`);
+  }
+
+  await page.getByRole('button', { name: '放弃修改' }).click();
+  await page.waitForFunction(count => document.querySelectorAll('.pm-pane-target .pm-row').length === count, targetCountBeforeDelete);
+}
+
 async function verifyPresetActions(page, fixture, viewportName) {
   await page.locator('select[name="sourceName"]').selectOption('雪月agent_v1（自改）');
   fixture.clearSavedPreset();
@@ -934,7 +1015,7 @@ try {
       throw new Error(`${viewport.name}: 出现了应移除的旧文案`);
     }
     const versionText = await page.locator('.pm-version-chip').textContent();
-    if (versionText?.trim() !== 'v1.30') {
+    if (versionText?.trim() !== 'v1.31') {
       throw new Error(`${viewport.name}: 标题旁没有显示当前版本号`);
     }
 
@@ -1016,6 +1097,7 @@ try {
       await verifySourceDetailEditing(page, fixture, viewport.name);
       await verifyPresetActions(page, fixture, viewport.name);
       await verifySourceDeleteDraft(page, fixture, viewport.name);
+      await verifyMultiSelectOperations(page, fixture, viewport.name);
       await verifySelectionKeepsScroll(page, viewport.name);
       await verifyDirectDragAndUnsavedClose(page, fixture, viewport.name);
       await page.locator('input[name="sourceQuery"]').fill('');
