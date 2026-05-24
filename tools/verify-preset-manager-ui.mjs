@@ -194,7 +194,17 @@ async function serveFixture() {
 
     if (url.pathname === '/script-entry.js') {
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' });
-      response.end(`import '${cdnUrl}/dist/preset-manager/index.js';`);
+      response.end(`import * as presetStitcherScriptModule from '/script.js';
+import * as presetStitcherOpenAiModule from '/scripts/openai.js';
+import * as presetStitcherLayoutKit from '/scripts/tauritavern/layout-kit.js';
+
+window.__TT_PRESET_STITCHER_RUNTIME__ = {
+  scriptModule: presetStitcherScriptModule,
+  openAiModule: presetStitcherOpenAiModule,
+  layoutKit: presetStitcherLayoutKit,
+};
+
+await import('${cdnUrl}/dist/preset-manager/index.js');`);
       return;
     }
 

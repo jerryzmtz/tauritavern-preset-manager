@@ -61,12 +61,6 @@ interface TauriTavernApi {
   };
 }
 
-interface TauriWindow extends Window {
-  __TAURITAVERN__?: TauriTavernApi;
-  __TAURITAVERN_MAIN_READY__?: Promise<void>;
-  __TT_PRESET_STITCHER_OPEN__?: () => void;
-}
-
 interface ScriptModule {
   getRequestHeaders?: () => Record<string, string>;
 }
@@ -77,6 +71,25 @@ interface OpenAiModule {
   oai_settings?: {
     preset_settings_openai?: string;
   };
+}
+
+type LayoutKit = {
+  waitForHostReady?: () => Promise<void>;
+  SURFACE?: Record<string, string>;
+  applySurface?: (element: Element, surface: string) => void;
+};
+
+interface PresetStitcherRuntime {
+  scriptModule?: ScriptModule;
+  openAiModule?: OpenAiModule;
+  layoutKit?: LayoutKit;
+}
+
+interface TauriWindow extends Window {
+  __TAURITAVERN__?: TauriTavernApi;
+  __TAURITAVERN_MAIN_READY__?: Promise<void>;
+  __TT_PRESET_STITCHER_OPEN__?: () => void;
+  __TT_PRESET_STITCHER_RUNTIME__?: PresetStitcherRuntime;
 }
 
 interface AppState {
@@ -131,7 +144,7 @@ const state: AppState = {
 
 let scriptModule: ScriptModule = {};
 let openAiModule: OpenAiModule = {};
-let layoutKit: { waitForHostReady?: () => Promise<void>; SURFACE?: Record<string, string>; applySurface?: (element: Element, surface: string) => void } = {};
+let layoutKit: LayoutKit = {};
 let isComposingInput = false;
 let pointerDrag: PointerDragState | null = null;
 let suppressNextClick = false;
@@ -169,21 +182,24 @@ async function openManagerFromScript(): Promise<void> {
 
 async function waitForHost(): Promise<void> {
   const tauriWindow = window as TauriWindow;
-  try {
-    layoutKit = await import(/* webpackIgnore: true */ hostModuleUrl('/scripts/tauritavern/layout-kit.js')) as typeof layoutKit;
+  const runtimeLayoutKit = tauriWindow.__TT_PRESET_STITCHER_RUNTIME__?.layoutKit;
+  if (runtimeLayoutKit) {
+    layoutKit = runtimeLayoutKit;
     await layoutKit.waitForHostReady?.();
-  } catch {
-    await (tauriWindow.__TAURITAVERN__?.ready ?? tauriWindow.__TAURITAVERN_MAIN_READY__ ?? Promise.resolve());
+    return;
   }
+
+  await (tauriWindow.__TAURITAVERN__?.ready ?? tauriWindow.__TAURITAVERN_MAIN_READY__ ?? Promise.resolve());
 }
 
 async function loadRuntimeModules(): Promise<void> {
-  scriptModule = await import(/* webpackIgnore: true */ hostModuleUrl('/script.js')) as ScriptModule;
-  openAiModule = await import(/* webpackIgnore: true */ hostModuleUrl('/scripts/openai.js')) as OpenAiModule;
-}
+  const runtime = (window as TauriWindow).__TT_PRESET_STITCHER_RUNTIME__;
+  if (!runtime?.scriptModule || !runtime?.openAiModule) {
+    throw new Error('预设缝合管理器缺少酒馆助手本地模块，请使用 v0.1.9 导入脚本。');
+  }
 
-function hostModuleUrl(path: string): string {
-  return new URL(path, window.location.href).href;
+  scriptModule = runtime.scriptModule;
+  openAiModule = runtime.openAiModule;
 }
 
 async function openManager(): Promise<void> {
