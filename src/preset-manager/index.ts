@@ -64,15 +64,11 @@ type RuntimeFunction = (...args: any[]) => unknown;
 type RuntimeHost = Record<string, unknown> & {
   TavernHelper?: Record<string, unknown>;
   getScriptId?: () => string;
-  getVariables?: (option: { type: 'script'; script_id?: string }) => Record<string, unknown>;
   updateVariablesWith?: (
     updater: (variables: Record<string, unknown>) => Record<string, unknown>,
     option: { type: 'script'; script_id?: string },
   ) => Record<string, unknown>;
-  insertOrAssignVariables?: (
-    variables: Record<string, unknown>,
-    option: { type: 'script'; script_id?: string },
-  ) => Record<string, unknown>;
+  deleteVariable?: (variablePath: string, option: { type: 'script'; script_id?: string }) => unknown;
   triggerSlash?: (command: string) => Promise<string | undefined>;
 };
 type RuntimeCreateOrReplacePreset = (
@@ -213,6 +209,7 @@ let debugEntries: DebugEntry[] = [];
 
 diagnose('module-evaluated', getRuntimeDiagnostics());
 start();
+cleanupLegacyScriptVariables();
 void checkVersionCatalog({ silent: true });
 
 function start(): void {
@@ -1849,18 +1846,6 @@ function loadVersionImportSourcePreference(): void {
 }
 
 function readVersionImportSourcePreference(): { sourceId: VersionImportSourceSelection; customTemplate: string } | null {
-  const runtime = globalThis as unknown as RuntimeHost;
-  try {
-    const scriptId = getCurrentScriptId();
-    const variables = runtime.getVariables?.({ type: 'script', script_id: scriptId });
-    const value = variables?.[VERSION_PREFERENCE_KEY];
-    if (isVersionImportSourcePreference(value)) {
-      return value;
-    }
-  } catch {
-    // Fall back to localStorage below.
-  }
-
   try {
     const raw = localStorage.getItem(`${STORAGE_NAMESPACE}:${VERSION_PREFERENCE_KEY}`);
     const parsed: unknown = raw ? JSON.parse(raw) : null;
@@ -1875,20 +1860,6 @@ function persistVersionImportSourcePreference(): void {
     sourceId: versionState.selectedSourceId,
     customTemplate: versionState.customTemplate,
   };
-  const runtime = globalThis as unknown as RuntimeHost;
-  try {
-    const scriptId = getCurrentScriptId();
-    if (typeof runtime.updateVariablesWith === 'function') {
-      runtime.updateVariablesWith(variables => ({ ...variables, [VERSION_PREFERENCE_KEY]: preference }), { type: 'script', script_id: scriptId });
-      return;
-    }
-    if (typeof runtime.insertOrAssignVariables === 'function') {
-      runtime.insertOrAssignVariables({ [VERSION_PREFERENCE_KEY]: preference }, { type: 'script', script_id: scriptId });
-      return;
-    }
-  } catch {
-    // Fall back to localStorage below.
-  }
 
   try {
     localStorage.setItem(`${STORAGE_NAMESPACE}:${VERSION_PREFERENCE_KEY}`, JSON.stringify(preference));
@@ -2458,22 +2429,29 @@ function diagnose(stage: string, details?: Record<string, unknown>): void {
     // ignored
   }
 
-  persistDiagnosticVariables();
 }
 
-function persistDiagnosticVariables(): void {
+function cleanupLegacyScriptVariables(): void {
   try {
     const runtime = globalThis as unknown as RuntimeHost;
     const getScriptIdFunction = runtime.getScriptId;
-    const insertOrAssignVariablesFunction = runtime.insertOrAssignVariables;
-    if (typeof getScriptIdFunction !== 'function' || typeof insertOrAssignVariablesFunction !== 'function') {
+    const scriptId = typeof getScriptIdFunction === 'function' ? getScriptIdFunction.call(runtime) : '';
+    if (!scriptId) {
       return;
     }
-    insertOrAssignVariablesFunction.call(
-      runtime,
-      { [DEBUG_VARIABLE_KEY]: debugEntries },
-      { type: 'script', script_id: getScriptIdFunction.call(runtime) },
-    );
+    if (typeof runtime.deleteVariable === 'function') {
+      runtime.deleteVariable(DEBUG_VARIABLE_KEY, { type: 'script', script_id: scriptId });
+      runtime.deleteVariable(VERSION_PREFERENCE_KEY, { type: 'script', script_id: scriptId });
+      return;
+    }
+    if (typeof runtime.updateVariablesWith === 'function') {
+      runtime.updateVariablesWith(variables => {
+        const nextVariables = { ...variables };
+        delete nextVariables[DEBUG_VARIABLE_KEY];
+        delete nextVariables[VERSION_PREFERENCE_KEY];
+        return nextVariables;
+      }, { type: 'script', script_id: scriptId });
+    }
   } catch {
     // ignored
   }
@@ -2499,7 +2477,7 @@ function getRuntimeDiagnostics(): Record<string, unknown> {
     hasEventOn: typeof runtime.eventOn === 'function',
     hasGetButtonEvent: typeof runtime.getButtonEvent === 'function',
     hasGetScriptId: typeof runtime.getScriptId === 'function',
-    hasInsertOrAssignVariables: typeof runtime.insertOrAssignVariables === 'function',
+    hasUpdateVariablesWith: typeof runtime.updateVariablesWith === 'function',
     hasTavernHelper: Boolean(runtime.TavernHelper),
     hasHelperGetPresetNames: typeof runtime.TavernHelper?.getPresetNames === 'function',
     hasGlobalGetPresetNames: typeof runtime.getPresetNames === 'function',

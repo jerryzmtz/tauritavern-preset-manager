@@ -276,6 +276,10 @@ function serveFixture() {
       window.__scriptVariables = updater(window.__scriptVariables);
       return window.__scriptVariables;
     };
+    window.deleteVariable = variablePath => {
+      delete window.__scriptVariables[variablePath];
+      return { variables: window.__scriptVariables, delete_occurred: true };
+    };
     window.insertOrAssignVariables = variables => {
       window.__scriptVariables = { ...window.__scriptVariables, ...variables };
       return window.__scriptVariables;
@@ -482,6 +486,10 @@ function serveFixture() {
       child.updateVariablesWith = updater => {
         child.__scriptVariables = updater(child.__scriptVariables);
         return child.__scriptVariables;
+      };
+      child.deleteVariable = variablePath => {
+        delete child.__scriptVariables[variablePath];
+        return { variables: child.__scriptVariables, delete_occurred: true };
       };
       child.insertOrAssignVariables = variables => {
         child.__scriptVariables = { ...(child.__scriptVariables ?? {}), ...variables };
@@ -881,7 +889,7 @@ async function verifyZeroSizedIframeParentMount(browser, fixture) {
         width: Math.round(panel.getBoundingClientRect().width),
         height: Math.round(panel.getBoundingClientRect().height),
       } : null,
-      debugLog: frame.contentWindow.__scriptVariables?.presetManagerDebugLogV1 ?? [],
+      debugLog: JSON.parse(frame.contentWindow.localStorage.getItem('preset-manager:debug:v1') ?? '[]'),
     };
   });
 
