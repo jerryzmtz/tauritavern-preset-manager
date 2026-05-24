@@ -9,6 +9,7 @@
     "dump": "node dump_schema.ts",
     "sync": "node tavern_sync.mjs",
     "verify:preset-data": "node tools/verify-preset-manager-data.mjs",
+    "verify:preset-version": "node --test --test-concurrency=1 \"src/preset-manager/version-manager.test.cjs\"",
     "verify:preset-ui": "node tools/verify-preset-manager-ui.mjs"
   },
   "browserslist": [

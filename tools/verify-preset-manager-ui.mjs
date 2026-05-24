@@ -182,6 +182,38 @@ function serveFixture() {
     window.__scriptButtonEventsEnabled = true;
     window.__updateScriptButtonsWithCalls = 0;
     window.__replaceScriptButtonsCalls = 0;
+    window.__versionScriptTrees = {
+      global: [{
+        type: 'script',
+        enabled: true,
+        name: '预设缝合管理器',
+        id: 'preset-manager-script-id',
+        content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v1.30/dist/preset-manager/index.js';",
+        info: '',
+        button: { enabled: true, buttons: [] },
+        data: {},
+      }],
+      preset: [],
+      character: [],
+    };
+    window.__scriptVariables = {};
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const href = String(input);
+      if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/releases/latest') {
+        return Promise.resolve(new Response(JSON.stringify({ tag_name: 'v1.31' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json; charset=utf-8' },
+        }));
+      }
+      if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/tags?per_page=20') {
+        return Promise.resolve(new Response(JSON.stringify([{ name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }, { name: 'v0.99' }] ), {
+          status: 200,
+          headers: { 'content-type': 'application/json; charset=utf-8' },
+        }));
+      }
+      return nativeFetch(input, init);
+    };
     window.$ = value => {
       const api = {
         on(event, callback) {
@@ -233,6 +265,21 @@ function serveFixture() {
     window.getPresetNames = () => Array.from(window.__presetFixtureStore.keys());
     window.getLoadedPresetName = () => '夏瑾二改（自用）';
     window.getPreset = name => window.__makeRuntimePreset(window.__presetFixtureStore.get(name));
+    window.getScriptId = () => 'preset-manager-script-id';
+    window.getScriptTrees = ({ type }) => window.__versionScriptTrees[type] ?? [];
+    window.updateScriptTreesWith = (updater, { type }) => {
+      window.__versionScriptTrees[type] = updater(window.__versionScriptTrees[type] ?? []);
+      return window.__versionScriptTrees[type];
+    };
+    window.getVariables = () => window.__scriptVariables;
+    window.updateVariablesWith = updater => {
+      window.__scriptVariables = updater(window.__scriptVariables);
+      return window.__scriptVariables;
+    };
+    window.insertOrAssignVariables = variables => {
+      window.__scriptVariables = { ...window.__scriptVariables, ...variables };
+      return window.__scriptVariables;
+    };
     window.createOrReplacePreset = async (name, preset, options = {}) => {
       window.__presetFixtureStore.set(name, JSON.parse(JSON.stringify(preset)));
       const response = await fetch('/api/presets/save', {
@@ -349,6 +396,38 @@ function serveFixture() {
       child.__registeredEvents = [];
       child.__updateScriptButtonsWithCalls = 0;
       child.__replaceScriptButtonsCalls = 0;
+      child.__versionScriptTrees = {
+        global: [{
+          type: 'script',
+          enabled: true,
+          name: '预设缝合管理器',
+          id: 'zero-frame-script-id',
+          content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v1.30/dist/preset-manager/index.js';",
+          info: '',
+          button: { enabled: true, buttons: [] },
+          data: {},
+        }],
+        preset: [],
+        character: [],
+      };
+      child.__scriptVariables = {};
+      const childNativeFetch = child.fetch.bind(child);
+      child.fetch = (input, init) => {
+        const href = String(input);
+        if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/releases/latest') {
+          return Promise.resolve(new child.Response(JSON.stringify({ tag_name: 'v1.31' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json; charset=utf-8' },
+          }));
+        }
+        if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/tags?per_page=20') {
+          return Promise.resolve(new child.Response(JSON.stringify([{ name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }, { name: 'v0.99' }] ), {
+            status: 200,
+            headers: { 'content-type': 'application/json; charset=utf-8' },
+          }));
+        }
+        return childNativeFetch(input, init);
+      };
       child.$ = value => {
         const api = {
           on(event, callback) {
@@ -394,8 +473,19 @@ function serveFixture() {
         throw new Error('replaceScriptButtons 不应被预设管理器入口使用');
       };
       child.getScriptId = () => 'zero-frame-script-id';
+      child.getScriptTrees = ({ type }) => child.__versionScriptTrees[type] ?? [];
+      child.updateScriptTreesWith = (updater, { type }) => {
+        child.__versionScriptTrees[type] = updater(child.__versionScriptTrees[type] ?? []);
+        return child.__versionScriptTrees[type];
+      };
+      child.getVariables = () => child.__scriptVariables;
+      child.updateVariablesWith = updater => {
+        child.__scriptVariables = updater(child.__scriptVariables);
+        return child.__scriptVariables;
+      };
       child.insertOrAssignVariables = variables => {
         child.__scriptVariables = { ...(child.__scriptVariables ?? {}), ...variables };
+        return child.__scriptVariables;
       };
       child.getPresetNames = () => Array.from(window.__presetFixtureStore.keys());
       child.getLoadedPresetName = () => '夏瑾二改（自用）';
@@ -835,6 +925,10 @@ try {
     if (!bodyText.includes('条目详情') || bodyText.includes('草稿') || bodyText.includes('结构正常')) {
       throw new Error(`${viewport.name}: 出现了应移除的旧文案`);
     }
+    const versionText = await page.locator('.pm-version-chip').textContent();
+    if (versionText?.trim() !== 'v1.30') {
+      throw new Error(`${viewport.name}: 标题旁没有显示当前版本号`);
+    }
 
     const panelBox = await page.locator('.pm-panel').boundingBox();
     if (!panelBox || panelBox.width > viewport.width + 1 || panelBox.height > viewport.height + 1) {
@@ -851,6 +945,21 @@ try {
     const initialTargetName = await page.locator('select[name="targetName"]').inputValue();
     if (initialTargetName !== '夏瑾二改（自用）') {
       throw new Error(`${viewport.name}: 目标预设没有默认使用当前 TT 预设`);
+    }
+    if (viewport.name === 'desktop-wide') {
+      await page.locator('.pm-version-button').click();
+      await page.locator('.pm-version-box').waitFor({ state: 'visible' });
+      await page.waitForFunction(() => document.body.innerText.includes('v1.31'));
+      if (await page.locator('.pm-version-row[data-version="v0.99"]').count()) {
+        throw new Error(`${viewport.name}: 版本列表不应显示 v1.0.0 以前的版本`);
+      }
+      await page.locator('.pm-version-row[data-version="v1.19"]').click();
+      const versionConfirmText = await page.locator('.pm-version-confirm').innerText();
+      if (!versionConfirmText.includes('可回退') || !versionConfirmText.includes('回退')) {
+        throw new Error(`${viewport.name}: 选择旧版本后没有显示回退语义`);
+      }
+      await page.getByTitle('关闭版本管理').click();
+      await page.locator('.pm-version-box').waitFor({ state: 'detached' });
     }
     await page.locator('select[name="sourceName"]').selectOption('雪月agent_v1（自改）');
     const firstSourceActionCount = await page.locator('.pm-pane-source .pm-row').first().locator('.pm-row-action').count();

@@ -1,5 +1,23 @@
 import './styles.css';
 import {
+  APP_VERSION,
+  compareVersionTags,
+  createScriptImportUrl,
+  CUSTOM_VERSION_IMPORT_SOURCE_ID,
+  DEFAULT_VERSION_IMPORT_TEMPLATE,
+  fetchVersionCatalog,
+  getKnownVersionImportSourceByTemplate,
+  inspectCurrentScriptVersion,
+  replaceCurrentScriptVersion,
+  validateVersionImportTemplate,
+  VERSION_IMPORT_SOURCES,
+  versionRelation,
+  VersionCatalog,
+  VersionImportSourceId,
+  VersionRelation,
+  ScriptVersionSource,
+} from './version-manager';
+import {
   createFavoriteFromEntry,
   deepClone,
   FavoriteEntry,
@@ -33,15 +51,29 @@ const BUTTON_REGISTRATION_RETRY_DELAY_MS = 250;
 const OPEN_REQUEST_DEBOUNCE_MS = 250;
 const FAVORITES_PRESET_VALUE = '__preset-manager-favorites__';
 const FAVORITES_PRESET_LABEL = '收藏夹';
+const VERSION_PREFERENCE_KEY = 'version-import-source';
 
 type MobileTab = 'source' | 'target' | 'preview';
 type EntryKind = 'source' | 'target' | 'favorite';
 type PresetPaneKind = 'source' | 'target';
 type FilterValue = 'all' | 'enabled' | 'disabled' | 'system' | 'user' | 'assistant';
 type DetailRole = 'system' | 'user' | 'assistant';
+type VersionImportSourceSelection = VersionImportSourceId | typeof CUSTOM_VERSION_IMPORT_SOURCE_ID;
+type VersionMessageTone = '' | 'success' | 'warning';
 type RuntimeFunction = (...args: any[]) => unknown;
 type RuntimeHost = Record<string, unknown> & {
   TavernHelper?: Record<string, unknown>;
+  getScriptId?: () => string;
+  getVariables?: (option: { type: 'script'; script_id?: string }) => Record<string, unknown>;
+  updateVariablesWith?: (
+    updater: (variables: Record<string, unknown>) => Record<string, unknown>,
+    option: { type: 'script'; script_id?: string },
+  ) => Record<string, unknown>;
+  insertOrAssignVariables?: (
+    variables: Record<string, unknown>,
+    option: { type: 'script'; script_id?: string },
+  ) => Record<string, unknown>;
+  triggerSlash?: (command: string) => Promise<string | undefined>;
 };
 type RuntimeCreateOrReplacePreset = (
   presetName: string,
@@ -113,6 +145,18 @@ interface AppState {
   favorites: FavoriteEntry[];
 }
 
+interface VersionDialogState {
+  open: boolean;
+  checking: boolean;
+  catalog: VersionCatalog | null;
+  source: ScriptVersionSource | null;
+  targetVersion: string;
+  selectedSourceId: VersionImportSourceSelection;
+  customTemplate: string;
+  message: string;
+  messageTone: VersionMessageTone;
+}
+
 const state: AppState = {
   ready: false,
   isOpen: false,
@@ -142,6 +186,18 @@ const state: AppState = {
   favorites: [],
 };
 
+const versionState: VersionDialogState = {
+  open: false,
+  checking: false,
+  catalog: null,
+  source: null,
+  targetVersion: '',
+  selectedSourceId: 'jsdelivr',
+  customTemplate: DEFAULT_VERSION_IMPORT_TEMPLATE,
+  message: '',
+  messageTone: '',
+};
+
 let isComposingInput = false;
 let pointerDrag: PointerDragState | null = null;
 let suppressNextClick = false;
@@ -157,6 +213,7 @@ let debugEntries: DebugEntry[] = [];
 
 diagnose('module-evaluated', getRuntimeDiagnostics());
 start();
+void checkVersionCatalog({ silent: true });
 
 function start(): void {
   diagnose('start', { readyState: document.readyState, hasJquery: typeof $ === 'function' });
@@ -831,7 +888,14 @@ function renderDialog(): string {
     <section class="pm-panel" role="dialog" aria-modal="true" aria-label="预设缝合管理器" data-active-tab="${state.activeTab}">
       <header class="pm-header">
         <div class="pm-title-block">
-          <div class="pm-title">预设缝合管理器</div>
+          <div class="pm-title-line">
+            <div class="pm-title">预设缝合管理器</div>
+            <span class="pm-version-chip">${APP_VERSION}</span>
+            <button class="pm-version-button ${getVersionButtonClass()}" type="button" data-action="open-version-manager" title="${escapeAttr(getVersionButtonTitle())}" aria-label="${escapeAttr(getVersionButtonTitle())}">
+              <i class="fa-solid ${getVersionButtonIcon()}" aria-hidden="true"></i>
+              ${isVersionUpdateAvailable() ? '<span class="pm-update-dot" aria-hidden="true"></span>' : ''}
+            </button>
+          </div>
           <div class="pm-subtitle">${escapeHtml(getStatusText(sourceEntries.length, targetEntries.length))}</div>
         </div>
         <div class="pm-header-actions">
@@ -866,6 +930,144 @@ function renderDialog(): string {
         </div>
       </footer>
     </section>
+    ${renderVersionDialog()}
+  `;
+}
+
+function renderVersionDialog(): string {
+  if (!versionState.open) {
+    return '';
+  }
+
+  const latestVersion = getLatestVersion();
+  const source = versionState.source;
+  const sourceLabel = source ? formatScriptVersionSource(source) : '尚未读取当前脚本';
+  const templateValidation = validateSelectedVersionImportTemplate();
+  const targetVersion = versionState.targetVersion;
+  const targetRelation = targetVersion ? versionRelation(targetVersion, APP_VERSION) : null;
+  const targetImportStatement = targetVersion ? createVersionImportStatement(targetVersion) : '';
+
+  return `
+    <div class="pm-version-overlay" data-action="close-version-manager">
+      <section class="pm-version-box" role="dialog" aria-modal="true" aria-label="版本管理" data-version-dialog="true">
+        <header class="pm-version-header">
+          <div>
+            <h2>版本管理</h2>
+            <p>选择脚本版本，或切换导入来源。</p>
+          </div>
+          <button class="pm-icon-button" type="button" data-action="close-version-manager" title="关闭版本管理" aria-label="关闭版本管理">
+            <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+          </button>
+        </header>
+
+        <div class="pm-version-summary">
+          <div><span>当前内置</span><strong>${APP_VERSION}</strong></div>
+          <div><span>检测最新</span><strong>${escapeHtml(latestVersion ?? '未检测到')}</strong></div>
+          <div><span>脚本来源</span><strong>${escapeHtml(sourceLabel)}</strong></div>
+        </div>
+
+        ${renderVersionHint()}
+
+        <section class="pm-version-source">
+          <label class="pm-field">
+            <span>导入来源</span>
+            <select name="versionImportSource">
+              ${renderVersionImportSourceOptions()}
+            </select>
+          </label>
+          ${versionState.selectedSourceId === CUSTOM_VERSION_IMPORT_SOURCE_ID ? `
+            <label class="pm-field pm-version-custom-source">
+              <span>自定义模板</span>
+              <input name="versionCustomTemplate" value="${escapeAttr(versionState.customTemplate)}" placeholder="https://.../{version}/dist/preset-manager/index.js" autocomplete="off" />
+            </label>
+          ` : ''}
+          <p>${escapeHtml(getSelectedVersionImportSourceDescription())}</p>
+          ${templateValidation.ok ? '' : `<p class="pm-version-error">${escapeHtml(templateValidation.message)}</p>`}
+        </section>
+
+        <div class="pm-version-actions">
+          <button class="pm-button pm-button-primary" type="button" data-action="version-latest" ${latestVersion && latestVersion !== APP_VERSION ? '' : 'disabled'}>
+            <i class="fa-solid fa-arrow-up" aria-hidden="true"></i>
+            更新到最新版
+          </button>
+          <button class="pm-button" type="button" data-action="refresh-version-manager" ${versionState.checking ? 'disabled' : ''}>
+            <i class="fa-solid fa-rotate ${versionState.checking ? 'pm-spin' : ''}" aria-hidden="true"></i>
+            ${versionState.checking ? '检测中' : '刷新版本'}
+          </button>
+        </div>
+
+        ${targetVersion ? `
+          <section class="pm-version-confirm">
+            <div class="pm-version-target">
+              <span>目标版本</span>
+              <strong>${escapeHtml(targetVersion)}</strong>
+              <em>${escapeHtml(formatVersionRelation(targetRelation))}</em>
+            </div>
+            ${state.dirty ? '<p class="pm-version-warning">当前有未保存预设修改。脚本版本切换不会保存或丢弃它们，但刷新页面会丢失页面内草稿。</p>' : ''}
+            <code>${escapeHtml(targetImportStatement)}</code>
+            <div class="pm-version-target-actions">
+              <button class="pm-button" type="button" data-action="copy-version-import">
+                <i class="fa-solid fa-copy" aria-hidden="true"></i>
+                复制
+              </button>
+              <button class="pm-button" type="button" data-action="clear-version-target">取消</button>
+              <button class="pm-button pm-button-primary" type="button" data-action="confirm-version-switch" ${templateValidation.ok ? '' : 'disabled'}>
+                ${escapeHtml(formatVersionSwitchAction(targetRelation))}
+              </button>
+            </div>
+          </section>
+        ` : ''}
+
+        ${versionState.message ? `
+          <section class="pm-version-result ${versionState.messageTone}">
+            <div>${escapeHtml(versionState.message)}</div>
+            ${versionState.messageTone === 'success' ? `
+              <button class="pm-button" type="button" data-action="reload-page">
+                <i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i>
+                刷新页面
+              </button>
+            ` : ''}
+          </section>
+        ` : ''}
+
+        <div class="pm-version-list" data-version-list="true">
+          ${getVersionRows().map(renderVersionRow).join('')}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderVersionHint(): string {
+  if (versionState.checking) {
+    return '<div class="pm-version-hint">正在检查脚本版本。</div>';
+  }
+  if (versionState.catalog?.errorMessage) {
+    return `<div class="pm-version-hint warning">${escapeHtml(versionState.catalog.errorMessage)}</div>`;
+  }
+  if (isVersionUpdateAvailable()) {
+    return `<div class="pm-version-hint success">发现新版本 ${escapeHtml(getLatestVersion())}。</div>`;
+  }
+  return '<div class="pm-version-hint">当前内置版本没有检测到更新。</div>';
+}
+
+function renderVersionImportSourceOptions(): string {
+  const options = [
+    ...VERSION_IMPORT_SOURCES.map(source => [source.id, source.label] as const),
+    [CUSTOM_VERSION_IMPORT_SOURCE_ID, '自定义模板'] as const,
+  ];
+  return options
+    .map(([id, label]) => `<option value="${id}" ${versionState.selectedSourceId === id ? 'selected' : ''}>${escapeHtml(label)}</option>`)
+    .join('');
+}
+
+function renderVersionRow(version: string): string {
+  const relation = versionRelation(version, APP_VERSION);
+  return `
+    <button class="pm-version-row ${relation}" type="button" data-action="version-select" data-version="${escapeAttr(version)}">
+      <span>${escapeHtml(version)}</span>
+      <em>${escapeHtml(formatVersionRelation(relation))}</em>
+    </button>
   `;
 }
 
@@ -1056,6 +1258,93 @@ function getStatusText(sourceCount: number, targetCount: number): string {
   return `来源 ${sourceCount} 条，目标 ${targetCount} 条，收藏 ${state.favorites.length} 条`;
 }
 
+function getVersionButtonClass(): string {
+  return [
+    versionState.checking ? 'is-checking' : '',
+    isVersionUpdateAvailable() ? 'is-available' : '',
+  ].filter(Boolean).join(' ');
+}
+
+function getVersionButtonTitle(): string {
+  if (versionState.checking) {
+    return '正在检查脚本版本';
+  }
+  const latestVersion = getLatestVersion();
+  if (latestVersion && compareVersionTags(latestVersion, APP_VERSION) > 0) {
+    return `发现新版本 ${latestVersion}`;
+  }
+  return '版本管理';
+}
+
+function getVersionButtonIcon(): string {
+  return versionState.checking ? 'fa-rotate pm-spin' : 'fa-clock-rotate-left';
+}
+
+function getLatestVersion(): string | null {
+  return versionState.catalog?.latestVersion ?? versionState.catalog?.versions[0] ?? null;
+}
+
+function isVersionUpdateAvailable(): boolean {
+  const latestVersion = getLatestVersion();
+  return latestVersion ? compareVersionTags(latestVersion, APP_VERSION) > 0 : false;
+}
+
+function getVersionRows(): string[] {
+  const versions = versionState.catalog?.versions ?? [];
+  return versions.includes(APP_VERSION) ? versions : [APP_VERSION, ...versions];
+}
+
+function getSelectedVersionImportTemplate(): string {
+  if (versionState.selectedSourceId === CUSTOM_VERSION_IMPORT_SOURCE_ID) {
+    return versionState.customTemplate;
+  }
+  return VERSION_IMPORT_SOURCES.find(source => source.id === versionState.selectedSourceId)?.template ?? DEFAULT_VERSION_IMPORT_TEMPLATE;
+}
+
+function validateSelectedVersionImportTemplate(): ReturnType<typeof validateVersionImportTemplate> {
+  return validateVersionImportTemplate(getSelectedVersionImportTemplate());
+}
+
+function createVersionImportStatement(version: string): string {
+  return `import '${createScriptImportUrl(version, getSelectedVersionImportTemplate())}';`;
+}
+
+function getSelectedVersionImportSourceDescription(): string {
+  if (versionState.selectedSourceId === CUSTOM_VERSION_IMPORT_SOURCE_ID) {
+    return '自定义模板必须包含 {version}，并指向本仓库的 dist/preset-manager/index.js。';
+  }
+  return VERSION_IMPORT_SOURCES.find(source => source.id === versionState.selectedSourceId)?.description ?? '';
+}
+
+function formatScriptVersionSource(source: ScriptVersionSource): string {
+  if (source.status === 'versioned') {
+    return `${source.specifier}，${formatScriptScope(source.scope)}`;
+  }
+  if (source.status === 'main') {
+    return `main，${formatScriptScope(source.scope)}`;
+  }
+  return source.message;
+}
+
+function formatScriptScope(scope: string): string {
+  if (scope === 'global') return '全局脚本';
+  if (scope === 'preset') return '预设脚本';
+  if (scope === 'character') return '角色脚本';
+  return scope;
+}
+
+function formatVersionRelation(relation: VersionRelation | null): string {
+  if (relation === 'newer') return '可更新';
+  if (relation === 'older') return '可回退';
+  return '当前';
+}
+
+function formatVersionSwitchAction(relation: VersionRelation | null): string {
+  if (relation === 'newer') return '更新';
+  if (relation === 'older') return '回退';
+  return '切换为此版本';
+}
+
 function getSourceEntries(): PromptEntry[] {
   const preset = getEditableSourceDraft();
   return preset ? filterEntries(listPromptEntries(deepClone(preset)), state.sourceQuery, state.sourceFilter) : [];
@@ -1110,6 +1399,10 @@ function onRootClick(event: MouseEvent): void {
   const actionElement = target.closest<HTMLElement>('[data-action]');
   const row = target.closest<HTMLElement>('.pm-row');
 
+  if (actionElement?.classList.contains('pm-version-overlay') && target.closest('.pm-version-box')) {
+    return;
+  }
+
   if (actionElement) {
     event.preventDefault();
     void handleAction(actionElement.dataset.action ?? '', actionElement);
@@ -1156,6 +1449,10 @@ function onRootChange(event: Event): void {
 
   if (target.name === 'detailRole') {
     updateDetailRole(target.value);
+  }
+
+  if (target.name === 'versionImportSource') {
+    updateVersionImportSource(target.value);
   }
 
   render();
@@ -1208,10 +1505,14 @@ function updateTextControlState(target: HTMLInputElement | HTMLTextAreaElement):
   if (target.name === 'detailContent') {
     updateDetailContent(target.value);
   }
+  if (target.name === 'versionCustomTemplate') {
+    versionState.customTemplate = target.value;
+    persistVersionImportSourcePreference();
+  }
 }
 
 function isManagedTextControl(target: HTMLInputElement | HTMLTextAreaElement): boolean {
-  return ['sourceQuery', 'targetQuery', 'favoriteQuery', 'detailContent'].includes(target.name);
+  return ['sourceQuery', 'targetQuery', 'favoriteQuery', 'detailContent', 'versionCustomTemplate'].includes(target.name);
 }
 
 function renderPreservingTextControl(target: HTMLInputElement | HTMLTextAreaElement): void {
@@ -1260,6 +1561,36 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
       hydratePresetList({ targetFromLoaded: true });
       state.notice = '已刷新预设列表';
       render();
+      return;
+    case 'open-version-manager':
+      openVersionManager();
+      return;
+    case 'close-version-manager':
+      closeVersionManager();
+      return;
+    case 'refresh-version-manager':
+      await refreshVersionManager();
+      return;
+    case 'version-latest':
+      requestVersionSwitch(getLatestVersion() ?? '');
+      return;
+    case 'version-select':
+      requestVersionSwitch(element.dataset.version ?? '');
+      return;
+    case 'clear-version-target':
+      versionState.targetVersion = '';
+      versionState.message = '';
+      versionState.messageTone = '';
+      render();
+      return;
+    case 'confirm-version-switch':
+      await confirmVersionSwitch();
+      return;
+    case 'copy-version-import':
+      await copyVersionImportStatement();
+      return;
+    case 'reload-page':
+      reloadPageForVersionChange();
       return;
     case 'tab':
       state.activeTab = (element.dataset.tab as MobileTab | undefined) ?? 'source';
@@ -1343,6 +1674,239 @@ function closeManager(): void {
 
   state.isOpen = false;
   render();
+}
+
+function openVersionManager(): void {
+  loadVersionImportSourcePreference();
+  refreshScriptVersionSource();
+  versionState.open = true;
+  versionState.message = '';
+  versionState.messageTone = '';
+  render();
+  if (!versionState.catalog) {
+    void checkVersionCatalog({ silent: false });
+  }
+}
+
+function closeVersionManager(): void {
+  versionState.open = false;
+  versionState.targetVersion = '';
+  versionState.message = '';
+  versionState.messageTone = '';
+  render();
+}
+
+async function refreshVersionManager(): Promise<void> {
+  refreshScriptVersionSource();
+  await checkVersionCatalog({ silent: false, force: true });
+}
+
+async function checkVersionCatalog(options: { silent: boolean; force?: boolean }): Promise<void> {
+  if (versionState.checking && !options.force) {
+    return;
+  }
+
+  versionState.checking = true;
+  if (versionState.open && !options.silent) {
+    render();
+  }
+
+  try {
+    versionState.catalog = await fetchVersionCatalog({ currentVersion: APP_VERSION, limit: 20 });
+  } catch (error) {
+    versionState.catalog = {
+      latestVersion: null,
+      versions: [APP_VERSION],
+      checkedAt: Date.now(),
+      errorMessage: error instanceof Error ? error.message : '版本检查失败。',
+    };
+  } finally {
+    versionState.checking = false;
+  }
+
+  if (versionState.open || !options.silent) {
+    render();
+  }
+}
+
+function refreshScriptVersionSource(): void {
+  const source = inspectCurrentScriptVersion();
+  versionState.source = source;
+  syncVersionImportSourceFromScript(source);
+}
+
+function syncVersionImportSourceFromScript(source: ScriptVersionSource): void {
+  if (source.status !== 'versioned' && source.status !== 'main') {
+    return;
+  }
+
+  const knownSource = getKnownVersionImportSourceByTemplate(source.importTemplate);
+  if (knownSource) {
+    versionState.selectedSourceId = knownSource.id;
+    versionState.customTemplate = source.importTemplate;
+    return;
+  }
+
+  versionState.selectedSourceId = CUSTOM_VERSION_IMPORT_SOURCE_ID;
+  versionState.customTemplate = source.importTemplate;
+}
+
+function updateVersionImportSource(value: string): void {
+  if (value === CUSTOM_VERSION_IMPORT_SOURCE_ID) {
+    versionState.selectedSourceId = CUSTOM_VERSION_IMPORT_SOURCE_ID;
+    if (!versionState.customTemplate) {
+      versionState.customTemplate = versionState.source?.importTemplate ?? DEFAULT_VERSION_IMPORT_TEMPLATE;
+    }
+  } else if (VERSION_IMPORT_SOURCES.some(source => source.id === value)) {
+    versionState.selectedSourceId = value as VersionImportSourceId;
+  }
+  versionState.message = '';
+  versionState.messageTone = '';
+  persistVersionImportSourcePreference();
+}
+
+function requestVersionSwitch(version: string): void {
+  if (!version) {
+    return;
+  }
+  versionState.targetVersion = version;
+  versionState.message = '';
+  versionState.messageTone = '';
+  render();
+}
+
+async function confirmVersionSwitch(): Promise<void> {
+  const targetVersion = versionState.targetVersion;
+  if (!targetVersion) {
+    return;
+  }
+
+  const validation = validateSelectedVersionImportTemplate();
+  if (!validation.ok) {
+    versionState.message = validation.message;
+    versionState.messageTone = 'warning';
+    showToast('error', validation.message);
+    render();
+    return;
+  }
+
+  const result = await replaceCurrentScriptVersion(targetVersion, { importTemplate: validation.template });
+  if (result.ok) {
+    versionState.source = inspectCurrentScriptVersion();
+    versionState.message = `已切换到 ${result.targetVersion}，刷新页面后生效。`;
+    versionState.messageTone = 'success';
+    persistVersionImportSourcePreference();
+    showToast('success', versionState.message);
+  } else {
+    versionState.source = result.source;
+    versionState.message = `${result.reason} 可复制导入语句手动替换。`;
+    versionState.messageTone = 'warning';
+    showToast('error', result.reason);
+  }
+  render();
+}
+
+async function copyVersionImportStatement(): Promise<void> {
+  if (!versionState.targetVersion) {
+    return;
+  }
+
+  const statement = createVersionImportStatement(versionState.targetVersion);
+  try {
+    await navigator.clipboard.writeText(statement);
+    versionState.message = '已复制导入语句。';
+    versionState.messageTone = 'success';
+    showToast('success', versionState.message);
+  } catch {
+    versionState.message = `复制失败，请手动复制：${statement}`;
+    versionState.messageTone = 'warning';
+    showToast('error', '复制失败');
+  }
+  render();
+}
+
+function reloadPageForVersionChange(): void {
+  const runtime = globalThis as unknown as RuntimeHost;
+  if (typeof runtime.triggerSlash === 'function') {
+    void runtime.triggerSlash('/reload-page').catch(() => window.location.reload());
+    return;
+  }
+  window.location.reload();
+}
+
+function loadVersionImportSourcePreference(): void {
+  const preference = readVersionImportSourcePreference();
+  if (!preference) {
+    return;
+  }
+
+  if (preference.sourceId === CUSTOM_VERSION_IMPORT_SOURCE_ID || VERSION_IMPORT_SOURCES.some(source => source.id === preference.sourceId)) {
+    versionState.selectedSourceId = preference.sourceId;
+  }
+  if (preference.customTemplate) {
+    versionState.customTemplate = preference.customTemplate;
+  }
+}
+
+function readVersionImportSourcePreference(): { sourceId: VersionImportSourceSelection; customTemplate: string } | null {
+  const runtime = globalThis as unknown as RuntimeHost;
+  try {
+    const scriptId = getCurrentScriptId();
+    const variables = runtime.getVariables?.({ type: 'script', script_id: scriptId });
+    const value = variables?.[VERSION_PREFERENCE_KEY];
+    if (isVersionImportSourcePreference(value)) {
+      return value;
+    }
+  } catch {
+    // Fall back to localStorage below.
+  }
+
+  try {
+    const raw = localStorage.getItem(`${STORAGE_NAMESPACE}:${VERSION_PREFERENCE_KEY}`);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    return isVersionImportSourcePreference(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistVersionImportSourcePreference(): void {
+  const preference = {
+    sourceId: versionState.selectedSourceId,
+    customTemplate: versionState.customTemplate,
+  };
+  const runtime = globalThis as unknown as RuntimeHost;
+  try {
+    const scriptId = getCurrentScriptId();
+    if (typeof runtime.updateVariablesWith === 'function') {
+      runtime.updateVariablesWith(variables => ({ ...variables, [VERSION_PREFERENCE_KEY]: preference }), { type: 'script', script_id: scriptId });
+      return;
+    }
+    if (typeof runtime.insertOrAssignVariables === 'function') {
+      runtime.insertOrAssignVariables({ [VERSION_PREFERENCE_KEY]: preference }, { type: 'script', script_id: scriptId });
+      return;
+    }
+  } catch {
+    // Fall back to localStorage below.
+  }
+
+  try {
+    localStorage.setItem(`${STORAGE_NAMESPACE}:${VERSION_PREFERENCE_KEY}`, JSON.stringify(preference));
+  } catch {
+    // ignored
+  }
+}
+
+function isVersionImportSourcePreference(value: unknown): value is { sourceId: VersionImportSourceSelection; customTemplate: string } {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  const sourceId = record.sourceId;
+  const customTemplate = record.customTemplate;
+  return typeof sourceId === 'string'
+    && (sourceId === CUSTOM_VERSION_IMPORT_SOURCE_ID || VERSION_IMPORT_SOURCES.some(source => source.id === sourceId))
+    && typeof customTemplate === 'string';
 }
 
 function getPresetPaneFromAction(element: HTMLElement): PresetPaneKind {
