@@ -1,10 +1,12 @@
 export const GLOBAL_PROMPT_ORDER_ID = 100001;
 
 export interface Prompt {
+  id?: string;
   identifier?: string;
   name?: string;
   content?: string;
   role?: string;
+  enabled?: boolean;
   system_prompt?: boolean;
   marker?: boolean;
   [key: string]: unknown;
@@ -55,11 +57,88 @@ export interface PresetValidation {
   promptsWithoutIdentifiers: number;
 }
 
+const PROMPT_FIELDS = [
+  'id',
+  'identifier',
+  'name',
+  'content',
+  'role',
+  'enabled',
+  'system_prompt',
+  'marker',
+  'position',
+  'extra',
+  'forbid_overrides',
+  'injection_position',
+  'injection_depth',
+  'injection_order',
+  'injection_trigger',
+  'attach_role',
+  'attach_index',
+  'attach_side',
+] as const;
+const PROMPT_ORDER_FIELDS = ['character_id', 'order'] as const;
+const PROMPT_ORDER_ENTRY_FIELDS = ['identifier', 'enabled'] as const;
+
 export function deepClone<T>(value: T): T {
   if (typeof structuredClone === 'function') {
     return structuredClone(value);
   }
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+export function materializePreset(preset: Preset): Preset {
+  const materialized = materializeRecord(preset) as Preset;
+  materialized.prompts = Array.isArray(preset.prompts)
+    ? preset.prompts.map(prompt => materializePrompt(prompt))
+    : [];
+  materialized.prompt_order = Array.isArray(preset.prompt_order)
+    ? preset.prompt_order.map(promptOrder => materializePromptOrder(promptOrder))
+    : [];
+  return materialized;
+}
+
+function materializePrompt(prompt: Prompt): Prompt {
+  return materializeRecord(prompt, PROMPT_FIELDS) as Prompt;
+}
+
+function materializePromptOrder(promptOrder: PromptOrder): PromptOrder {
+  const materialized = materializeRecord(promptOrder, PROMPT_ORDER_FIELDS) as PromptOrder;
+  materialized.order = Array.isArray(promptOrder.order)
+    ? promptOrder.order.map(entry => materializeRecord(entry, PROMPT_ORDER_ENTRY_FIELDS) as PromptOrderEntry)
+    : [];
+  return materialized;
+}
+
+function materializeRecord(
+  value: Record<string, unknown> | null | undefined,
+  knownFields: readonly string[] = [],
+): Record<string, unknown> {
+  const materialized: Record<string, unknown> = {};
+  if (!value || typeof value !== 'object') {
+    return materialized;
+  }
+
+  for (const [key, entryValue] of Object.entries(value)) {
+    materialized[key] = entryValue;
+  }
+
+  for (const field of knownFields) {
+    const entryValue = readRuntimeProperty(value, field);
+    if (entryValue !== undefined) {
+      materialized[field] = entryValue;
+    }
+  }
+
+  return materialized;
+}
+
+function readRuntimeProperty(value: Record<string, unknown>, field: string): unknown {
+  try {
+    return value[field];
+  } catch {
+    return undefined;
+  }
 }
 
 export function createId(): string {
@@ -89,15 +168,44 @@ export function getPromptRole(prompt: Prompt | undefined): string {
   return typeof role === 'string' && role.trim() ? role : 'system';
 }
 
+export function getPromptIdentifier(prompt: Prompt | undefined): string {
+  if (typeof prompt?.identifier === 'string' && prompt.identifier) {
+    return prompt.identifier;
+  }
+  if (typeof prompt?.id === 'string' && prompt.id) {
+    return prompt.id;
+  }
+  return '';
+}
+
 export function ensurePresetShape(preset: Preset): Preset {
   if (!Array.isArray(preset.prompts)) {
     preset.prompts = [];
+  }
+  if (isRuntimePresetShape(preset)) {
+    return preset;
   }
   if (!Array.isArray(preset.prompt_order)) {
     preset.prompt_order = [];
   }
   getPrimaryPromptOrder(preset, true);
   return preset;
+}
+
+function isRuntimePresetShape(preset: Preset): boolean {
+  return Array.isArray(preset.prompts)
+    && (
+      !Array.isArray(preset.prompt_order)
+      || preset.prompts.some(prompt => typeof prompt.id === 'string' && prompt.id)
+    );
+}
+
+function assignPromptIdentifier(prompt: Prompt, identifier: string, runtimeShape: boolean): void {
+  if (runtimeShape || typeof prompt.id === 'string') {
+    prompt.id = identifier;
+    return;
+  }
+  prompt.identifier = identifier;
 }
 
 export function getPrimaryPromptOrder(preset: Preset, create = false): PromptOrder | undefined {
@@ -130,20 +238,35 @@ export function getPrimaryPromptOrder(preset: Preset, create = false): PromptOrd
 export function listPromptEntries(preset: Preset): PromptEntry[] {
   const shaped = ensurePresetShape(preset);
   const prompts = shaped.prompts ?? [];
+  if (isRuntimePresetShape(shaped)) {
+    return prompts.map((prompt, index) => toPromptEntry(prompt, undefined, index, true));
+  }
+
   const order = getPrimaryPromptOrder(shaped, true)?.order ?? [];
   const promptById = new Map<string, Prompt>();
 
   for (const prompt of prompts) {
-    if (typeof prompt.identifier === 'string' && prompt.identifier) {
-      promptById.set(prompt.identifier, prompt);
+    const identifier = getPromptIdentifier(prompt);
+    if (identifier) {
+      promptById.set(identifier, prompt);
     }
   }
+
+  const canRecoverIdsByOrder = prompts.length > 0
+    && promptById.size === 0
+    && order.length > 0;
 
   const entries: PromptEntry[] = [];
   const seen = new Set<string>();
 
   order.forEach((orderEntry, index) => {
-    const prompt = promptById.get(orderEntry.identifier);
+    let prompt = promptById.get(orderEntry.identifier);
+    if (!prompt && canRecoverIdsByOrder) {
+      prompt = prompts[index];
+      if (prompt && typeof orderEntry.identifier === 'string' && orderEntry.identifier) {
+        assignPromptIdentifier(prompt, orderEntry.identifier, false);
+      }
+    }
     if (!prompt) {
       return;
     }
@@ -152,26 +275,32 @@ export function listPromptEntries(preset: Preset): PromptEntry[] {
   });
 
   prompts.forEach(prompt => {
-    if (typeof prompt.identifier !== 'string' || !prompt.identifier || seen.has(prompt.identifier)) {
+    const identifier = getPromptIdentifier(prompt);
+    if (!identifier || seen.has(identifier)) {
       return;
     }
-    entries.push(toPromptEntry(prompt, undefined, entries.length));
+    entries.push(toPromptEntry(prompt, undefined, entries.length, false));
   });
 
   return entries;
 }
 
-export function toPromptEntry(prompt: Prompt, order: PromptOrderEntry | undefined, orderIndex: number): PromptEntry {
-  const id = typeof prompt.identifier === 'string' && prompt.identifier ? prompt.identifier : createId();
-  if (!prompt.identifier) {
-    prompt.identifier = id;
+export function toPromptEntry(
+  prompt: Prompt,
+  order: PromptOrderEntry | undefined,
+  orderIndex: number,
+  runtimeShape = false,
+): PromptEntry {
+  const id = getPromptIdentifier(prompt) || createId();
+  if (!getPromptIdentifier(prompt)) {
+    assignPromptIdentifier(prompt, id, runtimeShape);
   }
   return {
     id,
     name: getPromptName(prompt),
     content: getPromptContent(prompt),
     role: getPromptRole(prompt),
-    enabled: order?.enabled !== false,
+    enabled: order?.enabled ?? prompt.enabled ?? true,
     orderIndex,
     prompt,
     order,
@@ -180,13 +309,28 @@ export function toPromptEntry(prompt: Prompt, order: PromptOrderEntry | undefine
 
 export function insertPromptFromEntry(targetPreset: Preset, entry: PromptEntry | FavoriteEntry, insertIndex?: number): string {
   const shaped = ensurePresetShape(targetPreset);
+  const runtimeShape = isRuntimePresetShape(shaped);
   const prompt = deepClone(entry.prompt);
-  const identifier = getUniqueIdentifier(shaped, prompt.identifier);
-  prompt.identifier = identifier;
+  const identifier = getUniqueIdentifier(shaped, getPromptIdentifier(prompt));
+  assignPromptIdentifier(prompt, identifier, runtimeShape);
+  const enabled = 'enabled' in entry ? entry.enabled !== false : true;
+  if (runtimeShape) {
+    prompt.enabled = enabled;
+  }
   shaped.prompts?.push(prompt);
 
+  if (runtimeShape) {
+    const prompts = shaped.prompts ?? [];
+    const currentIndex = prompts.length - 1;
+    const index = normalizeInsertIndex(insertIndex, currentIndex);
+    if (index !== currentIndex) {
+      const [inserted] = prompts.splice(currentIndex, 1);
+      prompts.splice(index, 0, inserted);
+    }
+    return identifier;
+  }
+
   const order = getPrimaryPromptOrder(shaped, true)?.order ?? [];
-  const enabled = 'enabled' in entry ? entry.enabled !== false : true;
   const orderEntry: PromptOrderEntry = { identifier, enabled };
   const index = normalizeInsertIndex(insertIndex, order.length);
   order.splice(index, 0, orderEntry);
@@ -195,7 +339,11 @@ export function insertPromptFromEntry(targetPreset: Preset, entry: PromptEntry |
 
 export function removePrompt(targetPreset: Preset, identifier: string): void {
   const shaped = ensurePresetShape(targetPreset);
-  shaped.prompts = (shaped.prompts ?? []).filter(prompt => prompt.identifier !== identifier);
+  shaped.prompts = (shaped.prompts ?? []).filter(prompt => getPromptIdentifier(prompt) !== identifier);
+  if (isRuntimePresetShape(shaped)) {
+    return;
+  }
+
   const order = getPrimaryPromptOrder(shaped, true)?.order ?? [];
   const index = order.findIndex(entry => entry.identifier === identifier);
   if (index >= 0) {
@@ -204,6 +352,19 @@ export function removePrompt(targetPreset: Preset, identifier: string): void {
 }
 
 export function movePrompt(targetPreset: Preset, identifier: string, direction: -1 | 1): void {
+  const shaped = ensurePresetShape(targetPreset);
+  if (isRuntimePresetShape(shaped)) {
+    const prompts = shaped.prompts ?? [];
+    const currentIndex = prompts.findIndex(prompt => getPromptIdentifier(prompt) === identifier);
+    const nextIndex = currentIndex + direction;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= prompts.length) {
+      return;
+    }
+    const [prompt] = prompts.splice(currentIndex, 1);
+    prompts.splice(nextIndex, 0, prompt);
+    return;
+  }
+
   const order = getPrimaryPromptOrder(ensurePresetShape(targetPreset), true)?.order ?? [];
   const currentIndex = order.findIndex(entry => entry.identifier === identifier);
   const nextIndex = currentIndex + direction;
@@ -215,6 +376,18 @@ export function movePrompt(targetPreset: Preset, identifier: string, direction: 
 }
 
 export function movePromptToIndex(targetPreset: Preset, identifier: string, nextIndex: number): void {
+  const shaped = ensurePresetShape(targetPreset);
+  if (isRuntimePresetShape(shaped)) {
+    const prompts = shaped.prompts ?? [];
+    const currentIndex = prompts.findIndex(prompt => getPromptIdentifier(prompt) === identifier);
+    if (currentIndex < 0) {
+      return;
+    }
+    const [prompt] = prompts.splice(currentIndex, 1);
+    prompts.splice(normalizeInsertIndex(nextIndex, prompts.length), 0, prompt);
+    return;
+  }
+
   const order = getPrimaryPromptOrder(ensurePresetShape(targetPreset), true)?.order ?? [];
   const currentIndex = order.findIndex(entry => entry.identifier === identifier);
   if (currentIndex < 0) {
@@ -225,6 +398,15 @@ export function movePromptToIndex(targetPreset: Preset, identifier: string, next
 }
 
 export function setPromptEnabled(targetPreset: Preset, identifier: string, enabled: boolean): void {
+  const shaped = ensurePresetShape(targetPreset);
+  if (isRuntimePresetShape(shaped)) {
+    const prompt = (shaped.prompts ?? []).find(item => getPromptIdentifier(item) === identifier);
+    if (prompt) {
+      prompt.enabled = enabled;
+    }
+    return;
+  }
+
   const order = getPrimaryPromptOrder(ensurePresetShape(targetPreset), true)?.order ?? [];
   let entry = order.find(item => item.identifier === identifier);
   if (!entry) {
@@ -236,8 +418,8 @@ export function setPromptEnabled(targetPreset: Preset, identifier: string, enabl
 
 export function validatePreset(preset: Preset): PresetValidation {
   const prompts = Array.isArray(preset.prompts) ? preset.prompts : [];
-  const order = getPrimaryPromptOrder(preset, false)?.order ?? [];
-  const ids = prompts.map(prompt => prompt.identifier).filter((id): id is string => typeof id === 'string' && id.length > 0);
+  const order = isRuntimePresetShape(preset) ? [] : getPrimaryPromptOrder(preset, false)?.order ?? [];
+  const ids = prompts.map(prompt => getPromptIdentifier(prompt)).filter((id): id is string => typeof id === 'string' && id.length > 0);
   const idSet = new Set(ids);
   const duplicateIdentifiers = ids.filter((id, index) => ids.indexOf(id) !== index);
   const missingOrderReferences = order
@@ -270,7 +452,7 @@ export function getContentLength(prompt: Prompt): number {
 
 function getUniqueIdentifier(preset: Preset, preferred: string | undefined): string {
   const prompts = Array.isArray(preset.prompts) ? preset.prompts : [];
-  const used = new Set(prompts.map(prompt => prompt.identifier).filter((id): id is string => typeof id === 'string'));
+  const used = new Set(prompts.map(prompt => getPromptIdentifier(prompt)).filter((id): id is string => typeof id === 'string' && id.length > 0));
   if (preferred && !used.has(preferred)) {
     return preferred;
   }

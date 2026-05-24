@@ -9,8 +9,7 @@
     "dump": "node dump_schema.ts",
     "sync": "node tavern_sync.mjs",
     "verify:preset-data": "node tools/verify-preset-manager-data.mjs",
-    "verify:preset-ui": "node tools/verify-preset-manager-ui.mjs",
-    "install:tauritavern": "node tools/install-to-tauritavern.mjs"
+    "verify:preset-ui": "node tools/verify-preset-manager-ui.mjs"
   },
   "browserslist": [
     "defaults and partially supports es6-module"

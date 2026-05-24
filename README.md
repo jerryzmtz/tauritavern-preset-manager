@@ -1,6 +1,6 @@
 # TauriTavern 预设缝合管理器
 
-一个面向 TauriTavern / SillyTavern 预设作者的 PromptManager 条目搬运工具。它提供双栏预设工作台：左侧选择来源预设，右侧选择目标预设，可以搜索、过滤、复制、收藏、重排、启用/停用和预览条目；所有修改都会先停留在目标草稿里，只有点击“保存预设”才会写回目标 OpenAI 预设。
+一个面向 TauriTavern / SillyTavern 预设作者的 PromptManager 条目搬运工具。它提供双栏预设工作台：左侧选择来源预设，右侧选择目标预设，可以搜索、过滤、复制、收藏、重排、启用/停用和预览条目；所有修改都会先作为未保存修改保留，只有点击“保存预设”才会写回目标 OpenAI 预设。
 
 ## 导入脚本
 
@@ -8,10 +8,10 @@
 
 - [酒馆助手脚本-预设缝合管理器.json](酒馆助手脚本-预设缝合管理器.json)
 
-脚本会自动从 jsDelivr 加载最新 tag；如果仓库还没有 tag，会回退到 `main`。入口使用酒馆助手脚本自带的“预设缝合”按钮，不会在页面右下角额外创建浮动按钮：
+入口使用酒馆助手脚本自带的“预设缝合”按钮，不会在页面右下角额外创建浮动按钮：
 
 ```javascript
-import(`https://testingcf.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@${version}/dist/preset-manager/index.js`);
+import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v1.01/dist/preset-manager/index.js';
 ```
 
 本地开发时可以运行：
@@ -19,7 +19,6 @@ import(`https://testingcf.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@$
 ```bash
 pnpm install
 pnpm build
-pnpm install:tauritavern
 ```
 
 验证命令：

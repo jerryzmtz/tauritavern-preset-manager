@@ -56,7 +56,7 @@ components:
 
 This interface must feel like a practical piece of TauriTavern furniture placed in the existing room. It is dense, quiet, and immediate. The user is here to compare real prompt entries, move them, and save only when ready; nothing should compete with that task.
 
-The system explicitly rejects standalone app branding, hero composition, decorative gradients, glassmorphism as decoration, and any color palette that fights the active tavern theme. The extension may introduce semantic aliases, but those aliases must resolve back to the host SmartTheme variables or conservative fallbacks.
+The system explicitly rejects standalone app branding, hero composition, decorative gradients, glassmorphism as decoration, and any color palette that fights the active tavern theme. The Tavern Helper script may introduce semantic aliases, but those aliases must resolve back to the host SmartTheme variables or conservative fallbacks.
 
 **Key Characteristics:**
 - Host-themed surfaces, borders, text, and accent states.
@@ -66,7 +66,7 @@ The system explicitly rejects standalone app branding, hero composition, decorat
 
 ## 2. Colors
 
-The palette is not owned by this extension. It is inherited from TauriTavern.
+The palette is not owned by this script. It is inherited from TauriTavern.
 
 ### Primary
 - **Theme Accent** (`var(--SmartThemeQuoteColor)`): used for current selection, primary save affordance, focus ring, and dirty-state indicator only.
@@ -105,7 +105,7 @@ Depth is conveyed through the host blur tint, border contrast, and one structura
 
 ### Shadow Vocabulary
 - **Panel Shadow** (`0 18px 48px color-mix(in srgb, var(--SmartThemeShadowColor) 42%, transparent)`): the main workbench floating above the tavern UI.
-- **Host Button Entry**: the extension does not create its own floating launcher. The entry point lives in the Tavern Helper script button area and opens the workbench through the script button event.
+- **Host Button Entry**: the script does not create its own floating launcher. The entry point lives in the Tavern Helper script button area and opens the workbench through the script button event.
 
 ### Named Rules
 **The Flat Rows Rule.** List rows do not get decorative shadows. Selection uses border and tonal background shifts.

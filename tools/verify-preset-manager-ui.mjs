@@ -89,7 +89,7 @@ for (let index = 0; index < 18; index += 1) {
     identifier: targetId,
     name: `目标长列表条目 ${index + 1}`,
     role: 'system',
-    content: `用于目标草稿排序测试的正文 ${index + 1}`,
+    content: `用于目标预设排序测试的正文 ${index + 1}`,
   });
   fixturePresets[1].preset.prompt_order[0].order.push({ identifier: targetId, enabled: index % 2 !== 0 });
 }
@@ -135,8 +135,283 @@ function serveFixture() {
 </head>
 <body>
   <main>中文测试：预设缝合管理器</main>
+  <div id="script-buttons"></div>
+  <script>
+    window.__presetFixtureStore = new Map(${JSON.stringify(fixturePresets)}.map(item => [item.name, item.preset]));
+    window.__makeRuntimePreset = data => {
+      const cloned = JSON.parse(JSON.stringify(data));
+      const order = cloned.prompt_order?.find(item => item.character_id === 100001)?.order
+        ?? cloned.prompt_order?.find(item => Array.isArray(item.order))?.order
+        ?? [];
+      const promptById = new Map(cloned.prompts.map(prompt => [prompt.identifier, prompt]));
+      const orderedPrompts = [
+        ...order.map(item => ({ source: promptById.get(item.identifier), order: item })).filter(item => item.source),
+        ...cloned.prompts
+          .filter(prompt => !order.some(item => item.identifier === prompt.identifier))
+          .map(prompt => ({ source: prompt, order: { enabled: prompt.enabled !== false } })),
+      ];
+      const wrapReadonlyFields = value => {
+        const wrapped = {};
+        for (const key of Object.keys(value)) {
+          Object.defineProperty(wrapped, key, {
+            configurable: true,
+            enumerable: false,
+            get: () => value[key],
+          });
+        }
+        return wrapped;
+      };
+      return {
+        settings: {},
+        prompts: orderedPrompts.map(({ source, order: orderEntry }) => wrapReadonlyFields({
+          id: source.identifier,
+          name: source.name,
+          enabled: orderEntry.enabled !== false,
+          position: { type: 'relative' },
+          role: source.role,
+          ...(typeof source.content === 'string' ? { content: source.content } : {}),
+          extra: source,
+        })),
+        prompts_unused: [],
+        extensions: {},
+      };
+    };
+    window.__scriptButtons = [];
+    window.__registeredEvents = [];
+    window.__scriptButtonEventsEnabled = true;
+    window.__updateScriptButtonsWithCalls = 0;
+    window.__replaceScriptButtonsCalls = 0;
+    window.$ = value => {
+      const api = {
+        on(event, callback) {
+          const target = value === window ? window : document;
+          target.addEventListener(event, callback);
+          return api;
+        },
+      };
+      if (typeof value === 'function') {
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', value, { once: true });
+        } else {
+          queueMicrotask(value);
+        }
+      }
+      return api;
+    };
+    window.getButtonEvent = name => 'helper-button:' + name;
+    window.eventOn = (event, callback) => {
+      window.__registeredEvents.push(event);
+      window.addEventListener(event, callback);
+      return { stop: () => window.removeEventListener(event, callback) };
+    };
+    window.updateScriptButtonsWith = updater => {
+      window.__updateScriptButtonsWithCalls += 1;
+      window.__scriptButtons = updater(window.__scriptButtons.map(button => ({ ...button }))).map(button => ({ ...button }));
+      const host = document.getElementById('script-buttons');
+      host.innerHTML = '';
+      for (const button of window.__scriptButtons.filter(item => item.visible)) {
+        const element = document.createElement('button');
+        element.type = 'button';
+        element.textContent = button.name;
+        element.dataset.buttonName = button.name;
+        element.dataset.scriptButton = button.name;
+        element.setAttribute('aria-label', button.name);
+        element.addEventListener('click', () => {
+          if (window.__scriptButtonEventsEnabled) {
+            window.dispatchEvent(new Event(window.getButtonEvent(button.name)));
+          }
+        });
+        host.appendChild(element);
+      }
+      return window.__scriptButtons;
+    };
+    window.replaceScriptButtons = () => {
+      window.__replaceScriptButtonsCalls += 1;
+      throw new Error('replaceScriptButtons 不应被预设管理器入口使用');
+    };
+    window.getPresetNames = () => Array.from(window.__presetFixtureStore.keys());
+    window.getPreset = name => window.__makeRuntimePreset(window.__presetFixtureStore.get(name));
+    window.createOrReplacePreset = async (name, preset, options = {}) => {
+      window.__presetFixtureStore.set(name, JSON.parse(JSON.stringify(preset)));
+      const response = await fetch('/api/presets/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiId: 'openai', name, preset, options }),
+      });
+      if (!response.ok) {
+        throw new Error('保存预设失败：HTTP ' + response.status);
+      }
+      return true;
+    };
+    window.TavernHelper = {
+      getPresetNames: window.getPresetNames,
+      getPreset: window.getPreset,
+      createOrReplacePreset: window.createOrReplacePreset,
+    };
+  </script>
   <script type="module" src="/dist/preset-manager/index.js"></script>
 </body>
+</html>`);
+      return;
+    }
+
+    if (url.pathname === '/zero-frame-host') {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      response.end(`<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>零尺寸脚本宿主测试</title>
+  <style>
+    :root {
+      --SmartThemeBodyColor: #efe8d4;
+      --SmartThemeBlurTintColor: #102426;
+      --SmartThemeBorderColor: #7f8777;
+      --SmartThemeQuoteColor: #becb9d;
+      --SmartThemeShadowColor: #111512;
+      --SmartThemeBlurStrength: 10px;
+      --tt-inset-top: 0px;
+      --tt-inset-right: 0px;
+      --tt-inset-bottom: 0px;
+      --tt-inset-left: 0px;
+      --tt-viewport-bottom-inset: 0px;
+      color: var(--SmartThemeBodyColor);
+      background: #172525;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <main>父页面中文测试：预设缝合管理器</main>
+  <div id="script-buttons"></div>
+  <iframe id="script-frame" title="zero-sized-script-frame" src="/zero-frame-child" style="width:0;height:0;border:0;display:block"></iframe>
+  <script>
+    window.__presetFixtureStore = new Map(${JSON.stringify(fixturePresets)}.map(item => [item.name, item.preset]));
+    const makeRuntimePreset = data => {
+      const cloned = JSON.parse(JSON.stringify(data));
+      const order = cloned.prompt_order?.find(item => item.character_id === 100001)?.order
+        ?? cloned.prompt_order?.find(item => Array.isArray(item.order))?.order
+        ?? [];
+      const promptById = new Map(cloned.prompts.map(prompt => [prompt.identifier, prompt]));
+      const orderedPrompts = [
+        ...order.map(item => ({ source: promptById.get(item.identifier), order: item })).filter(item => item.source),
+        ...cloned.prompts
+          .filter(prompt => !order.some(item => item.identifier === prompt.identifier))
+          .map(prompt => ({ source: prompt, order: { enabled: prompt.enabled !== false } })),
+      ];
+      const wrapReadonlyFields = value => {
+        const wrapped = {};
+        for (const key of Object.keys(value)) {
+          Object.defineProperty(wrapped, key, {
+            configurable: true,
+            enumerable: false,
+            get: () => value[key],
+          });
+        }
+        return wrapped;
+      };
+      return {
+        settings: {},
+        prompts: orderedPrompts.map(({ source, order: orderEntry }) => wrapReadonlyFields({
+          id: source.identifier,
+          name: source.name,
+          enabled: orderEntry.enabled !== false,
+          position: { type: 'relative' },
+          role: source.role,
+          ...(typeof source.content === 'string' ? { content: source.content } : {}),
+          extra: source,
+        })),
+        prompts_unused: [],
+        extensions: {},
+      };
+    };
+    const frame = document.getElementById('script-frame');
+    frame.addEventListener('load', () => {
+      const child = frame.contentWindow;
+      child.__scriptButtons = [];
+      child.__registeredEvents = [];
+      child.__updateScriptButtonsWithCalls = 0;
+      child.__replaceScriptButtonsCalls = 0;
+      child.$ = value => {
+        const api = {
+          on(event, callback) {
+            const target = value === child ? child : child.document;
+            target.addEventListener(event, callback);
+            return api;
+          },
+        };
+        if (typeof value === 'function') {
+          if (child.document.readyState === 'loading') {
+            child.document.addEventListener('DOMContentLoaded', value, { once: true });
+          } else {
+            child.queueMicrotask(value);
+          }
+        }
+        return api;
+      };
+      child.getButtonEvent = name => 'helper-button:' + name;
+      child.eventOn = (event, callback) => {
+        child.__registeredEvents.push(event);
+        child.addEventListener(event, callback);
+        return { stop: () => child.removeEventListener(event, callback) };
+      };
+      child.updateScriptButtonsWith = updater => {
+        child.__updateScriptButtonsWithCalls += 1;
+        child.__scriptButtons = updater(child.__scriptButtons.map(button => ({ ...button }))).map(button => ({ ...button }));
+        const host = document.getElementById('script-buttons');
+        host.innerHTML = '';
+        for (const button of child.__scriptButtons.filter(item => item.visible)) {
+          const element = document.createElement('button');
+          element.type = 'button';
+          element.textContent = button.name;
+          element.dataset.buttonName = button.name;
+          element.dataset.scriptButton = button.name;
+          element.setAttribute('aria-label', button.name);
+          element.addEventListener('click', () => child.dispatchEvent(new child.Event(child.getButtonEvent(button.name))));
+          host.appendChild(element);
+        }
+        return child.__scriptButtons;
+      };
+      child.replaceScriptButtons = () => {
+        child.__replaceScriptButtonsCalls += 1;
+        throw new Error('replaceScriptButtons 不应被预设管理器入口使用');
+      };
+      child.getScriptId = () => 'zero-frame-script-id';
+      child.insertOrAssignVariables = variables => {
+        child.__scriptVariables = { ...(child.__scriptVariables ?? {}), ...variables };
+      };
+      child.getPresetNames = () => Array.from(window.__presetFixtureStore.keys());
+      child.getPreset = name => makeRuntimePreset(window.__presetFixtureStore.get(name));
+      child.createOrReplacePreset = async (name, preset) => {
+        window.__presetFixtureStore.set(name, JSON.parse(JSON.stringify(preset)));
+        return true;
+      };
+      child.TavernHelper = {
+        getPresetNames: child.getPresetNames,
+        getPreset: child.getPreset,
+        createOrReplacePreset: child.createOrReplacePreset,
+      };
+      const script = child.document.createElement('script');
+      script.type = 'module';
+      script.src = '/dist/preset-manager/index.js';
+      child.document.head.appendChild(script);
+    });
+  </script>
+</body>
+</html>`);
+      return;
+    }
+
+    if (url.pathname === '/zero-frame-child') {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      response.end(`<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body></body>
 </html>`);
       return;
     }
@@ -144,20 +419,6 @@ function serveFixture() {
     if (url.pathname === '/dist/preset-manager/index.js') {
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' });
       response.end(await readFile(bundlePath, 'utf8'));
-      return;
-    }
-
-    if (url.pathname === '/script.js') {
-      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' });
-      response.end('export function getRequestHeaders(){return {"Content-Type":"application/json"}};');
-      return;
-    }
-
-    if (url.pathname === '/scripts/openai.js') {
-      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' });
-      response.end(`export const openai_settings = ${JSON.stringify(fixturePresets.map(item => item.preset))};
-export const openai_setting_names = ${JSON.stringify(Object.fromEntries(fixturePresets.map((item, index) => [item.name, index])))};
-export const oai_settings = { preset_settings_openai: "夏瑾二改（自用）" };`);
       return;
     }
 
@@ -247,22 +508,28 @@ async function verifyDirectDragAndUnsavedClose(page, fixture, viewportName) {
 
   const reorderedTitles = await targetTitles.evaluateAll(nodes => nodes.slice(0, 3).map(node => node.textContent?.trim()));
   if (reorderedTitles[1] !== originalTitles[0]) {
-    throw new Error(`${viewportName}: 目标草稿直接拖拽排序未生效`);
+    throw new Error(`${viewportName}: 目标预设直接拖拽排序未生效`);
   }
 
   page.once('dialog', dialog => {
-    if (!dialog.message().includes('未保存草稿')) {
-      throw new Error(`${viewportName}: 关闭未保存草稿时没有明确提示`);
+    if (!dialog.message().includes('未保存修改')) {
+      throw new Error(`${viewportName}: 关闭未保存修改时没有明确提示`);
     }
     void dialog.accept();
   });
   await page.getByTitle('关闭').click();
-  await page.getByRole('button', { name: /打开预设缝合管理器/ }).click();
+  await page.evaluate(() => {
+    window.__scriptButtonEventsEnabled = false;
+  });
+  await page.getByRole('button', { name: /^预设缝合$/ }).click();
   await page.locator('.pm-panel').waitFor({ state: 'visible' });
+  await page.evaluate(() => {
+    window.__scriptButtonEventsEnabled = true;
+  });
 
   const reopenedTitles = await targetTitles.evaluateAll(nodes => nodes.slice(0, 3).map(node => node.textContent?.trim()));
   if (reopenedTitles[0] !== originalTitles[0] || reopenedTitles[1] !== originalTitles[1]) {
-    throw new Error(`${viewportName}: 未保存排序在关闭后仍残留到草稿`);
+    throw new Error(`${viewportName}: 未保存排序在关闭后仍残留到目标预设`);
   }
   if (fixture.getSavedPreset() !== null) {
     throw new Error(`${viewportName}: 未点击保存却调用了保存接口`);
@@ -279,11 +546,61 @@ async function verifyDirectDragAndUnsavedClose(page, fixture, viewportName) {
   await page.waitForFunction(count => document.querySelectorAll('.pm-pane-target .pm-row').length > count, targetCountBefore);
   const targetTitleTexts = await targetTitles.evaluateAll(nodes => nodes.map(node => node.textContent?.trim()));
   if (!targetTitleTexts.includes(sourceTitle?.trim())) {
-    throw new Error(`${viewportName}: 来源条目无法直接拖入目标草稿`);
+    throw new Error(`${viewportName}: 来源条目无法直接拖入目标预设`);
   }
   if (fixture.getSavedPreset() !== null) {
-    throw new Error(`${viewportName}: 拖拽草稿操作不应触发保存接口`);
+    throw new Error(`${viewportName}: 拖拽目标预设操作不应触发保存接口`);
   }
+}
+
+async function verifyZeroSizedIframeParentMount(browser, fixture) {
+  const page = await browser.newPage({ viewport: { width: 1366, height: 768 } });
+  await page.goto(`${fixture.url}/zero-frame-host`);
+  await page.waitForFunction(() => {
+    const child = document.getElementById('script-frame')?.contentWindow;
+    return child?.__registeredEvents?.includes('helper-button:预设缝合');
+  });
+
+  const frameMetrics = await page.evaluate(() => {
+    const frame = document.getElementById('script-frame');
+    return {
+      frameWidth: frame.getBoundingClientRect().width,
+      frameHeight: frame.getBoundingClientRect().height,
+      childWidth: frame.contentWindow.innerWidth,
+      childHeight: frame.contentWindow.innerHeight,
+    };
+  });
+  if (frameMetrics.frameWidth !== 0 || frameMetrics.frameHeight !== 0 || frameMetrics.childWidth !== 0 || frameMetrics.childHeight !== 0) {
+    throw new Error('zero-frame: 测试夹具没有形成 0x0 脚本 iframe');
+  }
+
+  await page.getByRole('button', { name: /^预设缝合$/ }).click();
+  await page.locator('body > #tt-preset-stitcher-host #tt-preset-stitcher-root .pm-panel').waitFor({ state: 'visible' });
+
+  const mountInfo = await page.evaluate(() => {
+    const frame = document.getElementById('script-frame');
+    const childDocument = frame.contentWindow.document;
+    const panel = document.querySelector('#tt-preset-stitcher-root .pm-panel');
+    return {
+      inParent: Boolean(panel),
+      inChild: Boolean(childDocument.querySelector('#tt-preset-stitcher-root')),
+      panelBox: panel ? {
+        width: Math.round(panel.getBoundingClientRect().width),
+        height: Math.round(panel.getBoundingClientRect().height),
+      } : null,
+      debugLog: frame.contentWindow.__scriptVariables?.presetManagerDebugLogV1 ?? [],
+    };
+  });
+
+  const mountedEntry = mountInfo.debugLog.find(entry => entry.stage === 'render-mounted');
+  if (!mountInfo.inParent || mountInfo.inChild || !mountedEntry?.details?.mountedInParent) {
+    throw new Error('zero-frame: 面板没有挂到父页面可视层');
+  }
+  if (!mountInfo.panelBox || mountInfo.panelBox.width < 300 || mountInfo.panelBox.height < 300) {
+    throw new Error('zero-frame: 父页面中的面板尺寸异常');
+  }
+
+  await page.close();
 }
 
 const { chromium } = await importPlaywright();
@@ -293,15 +610,27 @@ const executablePath = process.env.PRESET_MANAGER_CHROME
 const browser = await chromium.launch({ headless: true, executablePath });
 
 try {
+  await verifyZeroSizedIframeParentMount(browser, fixture);
   for (const viewport of viewports) {
     const page = await browser.newPage({ viewport: { width: viewport.width, height: viewport.height } });
     await page.goto(fixture.url);
-    await page.getByRole('button', { name: /打开预设缝合管理器/ }).click();
+    await page.waitForFunction(() => window.__registeredEvents?.includes('helper-button:预设缝合'));
+    const buttonApiStats = await page.evaluate(() => ({
+      updateCalls: window.__updateScriptButtonsWithCalls,
+      replaceCalls: window.__replaceScriptButtonsCalls,
+    }));
+    if (buttonApiStats.updateCalls < 1 || buttonApiStats.replaceCalls !== 0) {
+      throw new Error(`${viewport.name}: 脚本按钮没有通过 updateScriptButtonsWith 注册`);
+    }
+    await page.getByRole('button', { name: /^预设缝合$/ }).click();
     await page.locator('.pm-panel').waitFor({ state: 'visible' });
 
     const bodyText = await page.locator('body').innerText();
     if (!bodyText.includes('预设缝合管理器') || bodyText.includes('????')) {
       throw new Error(`${viewport.name}: 中文 DOM 文本验证失败`);
+    }
+    if (bodyText.includes('草稿') || bodyText.includes('结构正常')) {
+      throw new Error(`${viewport.name}: 出现了应移除的旧文案`);
     }
 
     const panelBox = await page.locator('.pm-panel').boundingBox();

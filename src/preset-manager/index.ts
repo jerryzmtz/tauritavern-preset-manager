@@ -6,6 +6,7 @@ import {
   getContentLength,
   insertPromptFromEntry,
   listPromptEntries,
+  materializePreset,
   movePrompt,
   movePromptToIndex,
   Preset,
@@ -15,15 +16,38 @@ import {
   validatePreset,
 } from './core';
 
-const EXTENSION_NAMESPACE = 'preset-manager';
+const HELPER_BUTTON_NAME = '预设缝合';
+const STORAGE_NAMESPACE = 'preset-manager';
 const FAVORITES_TABLE = 'favorites';
 const FAVORITES_KEY = 'v1';
+const HOST_ROOT_ID = 'tt-preset-stitcher-host';
 const ROOT_ID = 'tt-preset-stitcher-root';
-const LAUNCHER_ID = 'tt-preset-stitcher-launcher';
+const OPEN_MANAGER_EVENT = 'preset-manager:open';
+const DEBUG_STORAGE_KEY = 'preset-manager:debug:v1';
+const DEBUG_VARIABLE_KEY = 'presetManagerDebugLogV1';
+const DEBUG_ENTRY_LIMIT = 80;
+const BUTTON_REGISTRATION_RETRY_LIMIT = 20;
+const BUTTON_REGISTRATION_RETRY_DELAY_MS = 250;
+const OPEN_REQUEST_DEBOUNCE_MS = 250;
 
 type MobileTab = 'source' | 'target' | 'favorites' | 'preview';
 type EntryKind = 'source' | 'target' | 'favorite';
 type FilterValue = 'all' | 'enabled' | 'disabled' | 'system' | 'user' | 'assistant';
+type RuntimeFunction = (...args: any[]) => unknown;
+type RuntimeHost = Record<string, unknown> & {
+  TavernHelper?: Record<string, unknown>;
+};
+type RuntimeCreateOrReplacePreset = (
+  presetName: string,
+  preset: unknown,
+  options?: { render?: 'debounced' | 'immediate' | 'none' },
+) => Promise<boolean>;
+
+interface DebugEntry {
+  at: string;
+  stage: string;
+  details?: Record<string, unknown>;
+}
 
 interface RenderScrollSnapshot {
   key: string;
@@ -44,37 +68,6 @@ interface PointerDragState {
 interface DropLocation {
   index: number;
   row: HTMLElement | null;
-}
-
-interface ExtensionStore {
-  tryGetJson?: (input: { namespace: string; table?: string; key: string }) => Promise<{ found: boolean; value?: unknown }>;
-  setJson?: (input: { namespace: string; table?: string; key: string; value: unknown }) => Promise<void>;
-}
-
-interface TauriTavernApi {
-  ready?: Promise<void>;
-  api?: {
-    extension?: {
-      store?: ExtensionStore;
-    };
-  };
-}
-
-interface TauriWindow extends Window {
-  __TAURITAVERN__?: TauriTavernApi;
-  __TAURITAVERN_MAIN_READY__?: Promise<void>;
-}
-
-interface ScriptModule {
-  getRequestHeaders?: () => Record<string, string>;
-}
-
-interface OpenAiModule {
-  openai_setting_names?: Record<string, number>;
-  openai_settings?: Preset[];
-  oai_settings?: {
-    preset_settings_openai?: string;
-  };
 }
 
 interface AppState {
@@ -127,57 +120,251 @@ const state: AppState = {
   favorites: [],
 };
 
-let scriptModule: ScriptModule = {};
-let openAiModule: OpenAiModule = {};
-let layoutKit: { waitForHostReady?: () => Promise<void>; SURFACE?: Record<string, string>; applySurface?: (element: Element, surface: string) => void } = {};
 let isComposingInput = false;
 let pointerDrag: PointerDragState | null = null;
 let suppressNextClick = false;
+let runtimeReadyPromise: Promise<void> | null = null;
+let buttonRegistrationAttempts = 0;
+let buttonEventHandle: EventOnReturn | null = null;
+let styleHandle: { destroy: () => void } | null = null;
+let hostRoot: HTMLElement | null = null;
+let mountDocument: Document | null = null;
+let isHelperButtonClickFallbackBound = false;
+let lastOpenRequestAt = 0;
+let debugEntries: DebugEntry[] = [];
 
-void boot();
+diagnose('module-evaluated', getRuntimeDiagnostics());
+start();
 
-async function boot(): Promise<void> {
-  await waitForHost();
-  await loadRuntimeModules();
-  state.favorites = await loadFavorites();
-  createLauncher();
-  state.ready = true;
-}
-
-async function waitForHost(): Promise<void> {
-  const tauriWindow = window as TauriWindow;
-  try {
-    layoutKit = await import(/* webpackIgnore: true */ '/scripts/tauritavern/layout-kit.js') as typeof layoutKit;
-    await layoutKit.waitForHostReady?.();
-  } catch {
-    await (tauriWindow.__TAURITAVERN__?.ready ?? tauriWindow.__TAURITAVERN_MAIN_READY__ ?? Promise.resolve());
-  }
-}
-
-async function loadRuntimeModules(): Promise<void> {
-  scriptModule = await import(/* webpackIgnore: true */ '/script.js') as ScriptModule;
-  openAiModule = await import(/* webpackIgnore: true */ '/scripts/openai.js') as OpenAiModule;
-}
-
-function createLauncher(): void {
-  if (document.getElementById(LAUNCHER_ID)) {
+function start(): void {
+  diagnose('start', { readyState: document.readyState, hasJquery: typeof $ === 'function' });
+  if (typeof $ === 'function') {
+    $(() => {
+      diagnose('jquery-ready');
+      registerManagerEntry();
+    });
+    $(window).on('pagehide', cleanupManagerEntry);
     return;
   }
 
-  const button = document.createElement('button');
-  button.id = LAUNCHER_ID;
-  button.className = 'pm-launcher menu_button';
-  button.type = 'button';
-  button.title = '打开预设缝合管理器';
-  button.setAttribute('aria-label', '打开预设缝合管理器');
-  button.innerHTML = '<i class="fa-solid fa-layer-group" aria-hidden="true"></i><span>预设缝合</span>';
-  button.addEventListener('click', () => {
-    void openManager();
+  runWhenDocumentReady(() => {
+    diagnose('dom-ready');
+    registerManagerEntry();
   });
-  document.body.appendChild(button);
+  window.addEventListener('pagehide', cleanupManagerEntry, { once: true });
+}
+
+function runWhenDocumentReady(callback: () => void): void {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', callback, { once: true });
+    return;
+  }
+  callback();
+}
+
+function registerManagerEntry(): void {
+  diagnose('register-start', getRuntimeDiagnostics());
+  try {
+    styleHandle ??= teleportCurrentStyles();
+    ensureHostRoot();
+    syncManagerButton();
+    buttonEventHandle?.stop();
+    buttonEventHandle = eventOn(getButtonEvent(HELPER_BUTTON_NAME), () => {
+      diagnose('button-event-received');
+      console.info('[预设缝合管理器] 收到脚本按钮事件');
+      window.dispatchEvent(new CustomEvent(OPEN_MANAGER_EVENT));
+    });
+    window.removeEventListener(OPEN_MANAGER_EVENT, requestOpenManager);
+    window.addEventListener(OPEN_MANAGER_EVENT, requestOpenManager);
+    bindHelperButtonClickFallback();
+    diagnose('register-success', { event: getButtonEvent(HELPER_BUTTON_NAME) });
+  } catch (error) {
+    buttonRegistrationAttempts += 1;
+    diagnose('register-error', {
+      attempt: buttonRegistrationAttempts,
+      message: error instanceof Error ? error.message : String(error),
+      ...getRuntimeDiagnostics(),
+    });
+    if (buttonRegistrationAttempts <= BUTTON_REGISTRATION_RETRY_LIMIT) {
+      window.setTimeout(registerManagerEntry, BUTTON_REGISTRATION_RETRY_DELAY_MS);
+      return;
+    }
+    console.error('预设缝合按钮注册失败', error);
+    showToast('error', error instanceof Error ? error.message : '预设缝合按钮注册失败');
+  }
+}
+
+function cleanupManagerEntry(): void {
+  diagnose('cleanup');
+  buttonEventHandle?.stop();
+  buttonEventHandle = null;
+  styleHandle?.destroy();
+  styleHandle = null;
+  window.removeEventListener(OPEN_MANAGER_EVENT, requestOpenManager);
+  document.removeEventListener('click', onPotentialHelperButtonClick, true);
+  if (mountDocument && mountDocument !== document) {
+    mountDocument.removeEventListener('click', onPotentialHelperButtonClick, true);
+  }
+  isHelperButtonClickFallbackBound = false;
+  const activeMountDocument = mountDocument ?? document;
+  activeMountDocument.getElementById(ROOT_ID)?.remove();
+  document.getElementById(ROOT_ID)?.remove();
+  hostRoot?.remove();
+  hostRoot = null;
+  mountDocument = null;
+}
+
+function scriptButton(name: string, button: Partial<ScriptButton> = {}, forceVisible = false): ScriptButton {
+  const nextButton = { ...button, name } as ScriptButton;
+  if (forceVisible || typeof nextButton.visible !== 'boolean') {
+    nextButton.visible = true;
+  }
+  return nextButton;
+}
+
+function syncManagerButton(): void {
+  diagnose('sync-button-start');
+  updateScriptButtonsWith(buttons => {
+    diagnose('sync-button-updater', {
+      before: buttons.map(button => `${button.name}:${button.visible ? 'visible' : 'hidden'}`),
+    });
+    let insertedButton = false;
+    const nextButtons: ScriptButton[] = [];
+
+    for (const button of buttons) {
+      if (button.name === HELPER_BUTTON_NAME) {
+        if (!insertedButton) {
+          nextButtons.push(scriptButton(HELPER_BUTTON_NAME, button, true));
+          insertedButton = true;
+        }
+        continue;
+      }
+      nextButtons.push(button);
+    }
+
+    if (!insertedButton) {
+      nextButtons.push(scriptButton(HELPER_BUTTON_NAME, {}, true));
+    }
+
+    diagnose('sync-button-next', {
+      after: nextButtons.map(button => `${button.name}:${button.visible ? 'visible' : 'hidden'}`),
+    });
+    return nextButtons;
+  });
+}
+
+function requestOpenManager(): void {
+  const now = Date.now();
+  if (now - lastOpenRequestAt < OPEN_REQUEST_DEBOUNCE_MS) {
+    return;
+  }
+  lastOpenRequestAt = now;
+  diagnose('open-requested');
+  void openManager().catch(error => {
+    const message = error instanceof Error ? error.message : '预设缝合管理器打开失败';
+    diagnose('open-error', { message });
+    console.error('预设缝合管理器打开失败', error);
+    showToast('error', message);
+  });
+}
+
+function bindHelperButtonClickFallback(): void {
+  if (isHelperButtonClickFallbackBound) {
+    return;
+  }
+  document.addEventListener('click', onPotentialHelperButtonClick, true);
+  const visibleDocument = getMountDocument();
+  if (visibleDocument !== document) {
+    visibleDocument.addEventListener('click', onPotentialHelperButtonClick, true);
+  }
+  isHelperButtonClickFallbackBound = true;
+}
+
+function onPotentialHelperButtonClick(event: MouseEvent): void {
+  const target = toElement(event.target);
+  const button = target?.closest<HTMLElement>('button, [role="button"], .menu_button, [data-button-name], [data-script-button]');
+  if (!button || !isHelperButtonElement(button)) {
+    return;
+  }
+  diagnose('dom-click-fallback', {
+    text: button.textContent?.trim(),
+    ariaLabel: button.getAttribute('aria-label'),
+    title: button.getAttribute('title'),
+  });
+  requestOpenManager();
+}
+
+function isHelperButtonElement(button: HTMLElement): boolean {
+  if (button.dataset.buttonName === HELPER_BUTTON_NAME || button.dataset.scriptButton === HELPER_BUTTON_NAME) {
+    return true;
+  }
+
+  const ariaLabel = button.getAttribute('aria-label')?.trim();
+  const title = button.getAttribute('title')?.trim();
+  const text = button.textContent?.trim();
+  return ariaLabel === HELPER_BUTTON_NAME
+    || title === HELPER_BUTTON_NAME
+    || title === `打开${HELPER_BUTTON_NAME}管理器`
+    || text === HELPER_BUTTON_NAME;
+}
+
+function helperGetPresetNames(): string[] {
+  return getTavernHelperFunction<() => string[]>('getPresetNames')();
+}
+
+function helperGetPreset(presetName: string): unknown {
+  return getTavernHelperFunction<(name: string) => unknown>('getPreset')(presetName);
+}
+
+function helperCreateOrReplacePreset(
+  presetName: string,
+  preset: unknown,
+  options: { render: 'immediate' | 'none' },
+): Promise<boolean> {
+  return getTavernHelperFunction<RuntimeCreateOrReplacePreset>('createOrReplacePreset')(presetName, preset, options);
+}
+
+function getTavernHelperFunction<T extends RuntimeFunction>(name: string): T {
+  const runtime = globalThis as unknown as RuntimeHost;
+  const helperValue = runtime.TavernHelper?.[name];
+  if (typeof helperValue === 'function') {
+    return helperValue.bind(runtime.TavernHelper) as T;
+  }
+
+  const directValue = runtime[name];
+  if (typeof directValue === 'function') {
+    return directValue.bind(runtime) as T;
+  }
+
+  diagnose('helper-api-missing', {
+    name,
+    hasTavernHelper: Boolean(runtime.TavernHelper),
+    tavernHelperKeys: runtime.TavernHelper ? Object.keys(runtime.TavernHelper).slice(0, 40) : [],
+  });
+  throw new Error(`酒馆助手接口不可用：${name}`);
+}
+
+async function ensureRuntimeReady(): Promise<void> {
+  if (state.ready) {
+    return;
+  }
+  runtimeReadyPromise ??= bootRuntime().catch(error => {
+    runtimeReadyPromise = null;
+    throw error;
+  });
+  await runtimeReadyPromise;
+}
+
+async function bootRuntime(): Promise<void> {
+  diagnose('boot-runtime-start');
+  state.favorites = await loadFavorites();
+  state.ready = true;
+  diagnose('boot-runtime-success', { favorites: state.favorites.length });
 }
 
 async function openManager(): Promise<void> {
+  diagnose('open-start');
+  await ensureRuntimeReady();
   clearMessage();
   state.targetDraft = null;
   state.targetOriginal = null;
@@ -185,11 +372,17 @@ async function openManager(): Promise<void> {
   hydratePresetList();
   state.isOpen = true;
   render();
+  diagnose('open-success', { presets: state.presetNames.length, source: state.sourceName, target: state.targetName });
 }
 
 function hydratePresetList(): void {
-  const names = openAiModule.openai_setting_names ?? {};
-  state.presetNames = Object.keys(names).sort((lhs, rhs) => lhs.localeCompare(rhs, 'zh-Hans-CN'));
+  state.presetNames = helperGetPresetNames()
+    .filter(name => name !== 'in_use')
+    .sort((lhs, rhs) => lhs.localeCompare(rhs, 'zh-Hans-CN'));
+  diagnose('preset-list-loaded', {
+    count: state.presetNames.length,
+    sample: state.presetNames.slice(0, 6),
+  });
 
   if (!state.sourceName || !state.presetNames.includes(state.sourceName)) {
     state.sourceName = state.presetNames[0] ?? '';
@@ -214,24 +407,28 @@ function resetTargetDraft(): void {
 }
 
 function getPresetByName(name: string): Preset | null {
-  const names = openAiModule.openai_setting_names ?? {};
-  const settings = openAiModule.openai_settings ?? [];
-  const index = names[name];
-  if (typeof index !== 'number') {
+  try {
+    return deepClone(materializePreset(helperGetPreset(name) as Preset));
+  } catch (error) {
+    diagnose('preset-load-error', {
+      name,
+      message: error instanceof Error ? error.message : String(error),
+    });
     return null;
   }
-  return settings[index] ?? null;
 }
 
 function render(): void {
-  const existing = document.getElementById(ROOT_ID);
+  const visibleDocument = getMountDocument();
+  const existing = visibleDocument.getElementById(ROOT_ID);
   if (!state.isOpen) {
     existing?.remove();
     return;
   }
 
   const scrollSnapshot = captureScrollSnapshot(existing);
-  const root = existing ?? document.createElement('div');
+  const mountPoint = ensureHostRoot(visibleDocument);
+  const root = existing ?? createManagerRoot();
   root.id = ROOT_ID;
   root.innerHTML = renderDialog();
 
@@ -249,11 +446,154 @@ function render(): void {
     root.addEventListener('pointermove', onPointerMove);
     root.addEventListener('pointerup', onPointerUp);
     root.addEventListener('pointercancel', onPointerCancel);
-    document.body.appendChild(root);
+    mountPoint.appendChild(root);
   }
 
   applyMobileSurfaces(root);
   restoreScrollSnapshot(root, scrollSnapshot);
+  diagnoseRootLayout(root, existing ? 'render-updated' : 'render-mounted');
+}
+
+function ensureHostRoot(targetDocument = getMountDocument()): HTMLElement {
+  if (hostRoot?.isConnected) {
+    return hostRoot;
+  }
+
+  const existing = targetDocument.getElementById(HOST_ROOT_ID) as HTMLElement | null;
+  hostRoot = existing ?? targetDocument.createElement('div');
+  hostRoot.id = HOST_ROOT_ID;
+  hostRoot.style.display = 'contents';
+
+  const scriptId = getCurrentScriptId();
+  if (scriptId) {
+    hostRoot.setAttribute('script_id', scriptId);
+  }
+
+  if (!existing) {
+    targetDocument.body.appendChild(hostRoot);
+  }
+
+  diagnose('host-root-ready', {
+    hasScriptId: hostRoot.hasAttribute('script_id'),
+    connected: hostRoot.isConnected,
+    childCount: hostRoot.childElementCount,
+    mountedInParent: targetDocument !== document,
+  });
+  return hostRoot;
+}
+
+function createManagerRoot(): HTMLElement {
+  const targetDocument = getMountDocument();
+  const root = targetDocument.createElement('div');
+  const scriptId = getCurrentScriptId();
+  if (scriptId) {
+    root.setAttribute('script_id', scriptId);
+  }
+  diagnose('root-created', { hasScriptId: root.hasAttribute('script_id'), mountedInParent: targetDocument !== document });
+  return root;
+}
+
+function diagnoseRootLayout(root: HTMLElement, stage: string): void {
+  const rootDocument = root.ownerDocument;
+  const rootWindow = rootDocument.defaultView ?? window;
+  const panel = root.querySelector<HTMLElement>('.pm-panel');
+  const rootStyle = rootWindow.getComputedStyle(root);
+  const panelStyle = panel ? rootWindow.getComputedStyle(panel) : null;
+  const bodyRect = rootDocument.body.getBoundingClientRect();
+  diagnose(stage, {
+    rootConnected: root.isConnected,
+    hostConnected: hostRoot?.isConnected ?? false,
+    mountedInParent: rootDocument !== document,
+    windowWidth: rootWindow.innerWidth,
+    windowHeight: rootWindow.innerHeight,
+    bodyWidth: roundPixel(bodyRect.width),
+    bodyHeight: roundPixel(bodyRect.height),
+    rootRect: rectToDiagnostics(root.getBoundingClientRect()),
+    panelRect: panel ? rectToDiagnostics(panel.getBoundingClientRect()) : null,
+    rootDisplay: rootStyle.display,
+    panelDisplay: panelStyle?.display ?? null,
+    panelVisibility: panelStyle?.visibility ?? null,
+    panelZIndex: panelStyle?.zIndex ?? null,
+  });
+}
+
+function rectToDiagnostics(rect: DOMRect): Record<string, number> {
+  return {
+    x: roundPixel(rect.x),
+    y: roundPixel(rect.y),
+    width: roundPixel(rect.width),
+    height: roundPixel(rect.height),
+  };
+}
+
+function roundPixel(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function getMountDocument(): Document {
+  if (mountDocument?.body?.isConnected) {
+    return mountDocument;
+  }
+
+  mountDocument = getParentDocument() ?? document;
+  return mountDocument;
+}
+
+function getParentDocument(): Document | null {
+  try {
+    if (window.parent && window.parent !== window && window.parent.document?.body) {
+      return window.parent.document;
+    }
+  } catch {
+    // Cross-origin parents are expected in browser fixtures and should just fall back.
+  }
+  return null;
+}
+
+function toElement(target: EventTarget | null): Element | null {
+  if (!target || typeof (target as Element).closest !== 'function') {
+    return null;
+  }
+  return target as Element;
+}
+
+function toInputElement(target: EventTarget | null): HTMLInputElement | null {
+  const element = toElement(target);
+  return element?.tagName === 'INPUT' ? element as HTMLInputElement : null;
+}
+
+function toSelectElement(target: EventTarget | null): HTMLSelectElement | null {
+  const element = toElement(target);
+  return element?.tagName === 'SELECT' ? element as HTMLSelectElement : null;
+}
+
+function teleportCurrentStyles(): { destroy: () => void } {
+  const targetDocument = getMountDocument();
+  const wrapper = targetDocument.createElement('div');
+  const scriptId = getCurrentScriptId();
+  if (scriptId) {
+    wrapper.setAttribute('script_id', scriptId);
+  }
+  document.head.querySelectorAll('style').forEach(style => {
+    wrapper.appendChild(style.cloneNode(true));
+  });
+  targetDocument.head.appendChild(wrapper);
+  diagnose('styles-teleported', {
+    hasScriptId: wrapper.hasAttribute('script_id'),
+    styleCount: wrapper.childElementCount,
+    mountedInParent: targetDocument !== document,
+  });
+  return {
+    destroy: () => wrapper.remove(),
+  };
+}
+
+function getCurrentScriptId(): string {
+  try {
+    return getScriptId();
+  } catch {
+    return '';
+  }
 }
 
 function captureScrollSnapshot(root: HTMLElement | null): RenderScrollSnapshot[] {
@@ -308,17 +648,6 @@ function findScrollElement(root: HTMLElement, key: string): HTMLElement | null {
 function applyMobileSurfaces(root: HTMLElement): void {
   const backdrop = root.querySelector('.pm-backdrop');
   const panel = root.querySelector('.pm-panel');
-  const surface = layoutKit.SURFACE;
-  if (layoutKit.applySurface && surface) {
-    if (backdrop && surface.Backdrop) {
-      layoutKit.applySurface(backdrop, surface.Backdrop);
-    }
-    if (panel && surface.FullscreenWindow) {
-      layoutKit.applySurface(panel, surface.FullscreenWindow);
-    }
-    return;
-  }
-
   backdrop?.setAttribute('data-tt-mobile-surface', 'backdrop');
   panel?.setAttribute('data-tt-mobile-surface', 'fullscreen-window');
 }
@@ -356,7 +685,7 @@ function renderDialog(): string {
       <main class="pm-body">
         ${renderPresetPane('source', '来源预设', state.sourceName, state.sourceQuery, state.sourceFilter, sourceEntries)}
         ${renderTransferColumn()}
-        ${renderPresetPane('target', '目标草稿', state.targetName, state.targetQuery, state.targetFilter, targetEntries)}
+        ${renderPresetPane('target', '目标预设', state.targetName, state.targetQuery, state.targetFilter, targetEntries)}
         <aside class="pm-side-pane" data-pane="favorites">
           ${renderFavorites(favoriteEntries)}
           ${renderInspector(selected, validation)}
@@ -368,7 +697,7 @@ function renderDialog(): string {
 
       <footer class="pm-footer">
         <div class="pm-footer-status">
-          ${state.dirty ? '<span class="pm-dot pm-dot-dirty"></span>有未保存草稿' : '<span class="pm-dot"></span>暂无未保存修改'}
+          ${state.dirty ? '<span class="pm-dot pm-dot-dirty"></span>有未保存的修改' : '<span class="pm-dot"></span>暂无未保存修改'}
           ${validation && !validation.ok ? `<span class="pm-validation">结构警告 ${validation.duplicateIdentifiers.length + validation.missingOrderReferences.length + validation.promptsWithoutIdentifiers}</span>` : ''}
         </div>
         <div class="pm-footer-actions">
@@ -454,7 +783,7 @@ function renderEntryRow(kind: 'source' | 'target', entry: PromptEntry, index: nu
       <button class="pm-row-action" type="button" data-action="target-up" data-id="${escapeAttr(entry.id)}" title="上移"><i class="fa-solid fa-arrow-up" aria-hidden="true"></i></button>
       <button class="pm-row-action" type="button" data-action="target-down" data-id="${escapeAttr(entry.id)}" title="下移"><i class="fa-solid fa-arrow-down" aria-hidden="true"></i></button>
       <button class="pm-row-action" type="button" data-action="favorite-target" data-id="${escapeAttr(entry.id)}" title="收藏条目"><i class="fa-regular fa-star" aria-hidden="true"></i></button>
-      <button class="pm-row-action pm-danger" type="button" data-action="target-remove" data-id="${escapeAttr(entry.id)}" title="从草稿移除"><i class="fa-solid fa-trash" aria-hidden="true"></i></button>
+      <button class="pm-row-action pm-danger" type="button" data-action="target-remove" data-id="${escapeAttr(entry.id)}" title="从目标预设移除"><i class="fa-solid fa-trash" aria-hidden="true"></i></button>
     `;
 
   return `
@@ -548,7 +877,7 @@ function renderInspector(entry: PromptEntry | FavoriteEntry | null, validation: 
 
 function renderValidation(validation: ReturnType<typeof validatePreset> | null): string {
   if (!validation || validation.ok) {
-    return '<div class="pm-structure-ok"><i class="fa-solid fa-check" aria-hidden="true"></i>目标草稿结构正常</div>';
+    return '';
   }
 
   const parts: string[] = [];
@@ -636,7 +965,7 @@ function getPreviewEntry(): PromptEntry | FavoriteEntry | null {
 }
 
 function onRootClick(event: MouseEvent): void {
-  const target = event.target instanceof Element ? event.target : null;
+  const target = toElement(event.target);
   if (!target) {
     return;
   }
@@ -664,8 +993,8 @@ function onRootClick(event: MouseEvent): void {
 }
 
 function onRootChange(event: Event): void {
-  const target = event.target;
-  if (!(target instanceof HTMLSelectElement)) {
+  const target = toSelectElement(event.target);
+  if (!target) {
     return;
   }
 
@@ -675,7 +1004,7 @@ function onRootChange(event: Event): void {
   }
 
   if (target.name === 'targetName') {
-    if (state.dirty && target.value !== state.targetName && !window.confirm('切换目标预设会放弃当前未保存草稿。继续切换？')) {
+    if (state.dirty && target.value !== state.targetName && !window.confirm('切换目标预设会放弃当前未保存修改。继续切换？')) {
       target.value = state.targetName;
       return;
     }
@@ -695,14 +1024,14 @@ function onRootChange(event: Event): void {
 }
 
 function onRootInput(event: Event): void {
-  const target = event.target;
-  if (!(target instanceof HTMLInputElement)) {
+  const target = toInputElement(event.target);
+  if (!target) {
     return;
   }
 
   updateInputState(target);
 
-  if (isComposingInput || (event instanceof InputEvent && event.isComposing)) {
+  if (isComposingInput || ('isComposing' in event && Boolean((event as InputEvent).isComposing))) {
     return;
   }
 
@@ -710,14 +1039,15 @@ function onRootInput(event: Event): void {
 }
 
 function onCompositionStart(event: CompositionEvent): void {
-  if (event.target instanceof HTMLInputElement && isManagedInput(event.target)) {
+  const target = toInputElement(event.target);
+  if (target && isManagedInput(target)) {
     isComposingInput = true;
   }
 }
 
 function onCompositionEnd(event: CompositionEvent): void {
-  const target = event.target;
-  if (!(target instanceof HTMLInputElement) || !isManagedInput(target)) {
+  const target = toInputElement(event.target);
+  if (!target || !isManagedInput(target)) {
     isComposingInput = false;
     return;
   }
@@ -747,10 +1077,11 @@ function renderPreservingInput(target: HTMLInputElement): void {
   const name = target.name;
   const selectionStart = target.selectionStart;
   const selectionEnd = target.selectionEnd;
+  const targetDocument = target.ownerDocument ?? getMountDocument();
 
   render();
 
-  const replacement = document.querySelector<HTMLInputElement>(`#${ROOT_ID} input[name="${CSS.escape(name)}"]`);
+  const replacement = targetDocument.querySelector<HTMLInputElement>(`#${ROOT_ID} input[name="${CSS.escape(name)}"]`);
   if (!replacement) {
     return;
   }
@@ -762,7 +1093,7 @@ function renderPreservingInput(target: HTMLInputElement): void {
 }
 
 function onKeyDown(event: KeyboardEvent): void {
-  const target = event.target instanceof HTMLElement ? event.target : null;
+  const target = toElement(event.target);
   const row = target?.closest<HTMLElement>('.pm-row');
   if (!row || !['Enter', ' '].includes(event.key)) {
     return;
@@ -780,7 +1111,6 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
       closeManager();
       return;
     case 'refresh':
-      await loadRuntimeModules();
       hydratePresetList();
       state.notice = '已刷新预设列表';
       render();
@@ -842,7 +1172,7 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
 }
 
 function closeManager(): void {
-  if (state.dirty && !window.confirm('关闭会放弃当前未保存草稿。继续关闭？')) {
+  if (state.dirty && !window.confirm('关闭会放弃当前未保存修改。继续关闭？')) {
     render();
     return;
   }
@@ -972,7 +1302,7 @@ async function saveTargetDraft(): Promise<void> {
 
   const validation = validatePreset(state.targetDraft);
   if (!validation.ok) {
-    state.error = '目标草稿存在结构问题，请先处理重复 ID 或缺失引用';
+    state.error = '目标预设存在结构问题，请先处理重复 ID 或缺失引用';
     render();
     return;
   }
@@ -1004,103 +1334,100 @@ async function saveTargetDraft(): Promise<void> {
 }
 
 async function persistPreset(name: string, preset: Preset, triggerUi: boolean): Promise<string> {
-  const headers = scriptModule.getRequestHeaders?.() ?? { 'Content-Type': 'application/json' };
-  const response = await fetch('/api/presets/save', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      apiId: 'openai',
-      name,
-      preset,
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`保存预设失败：HTTP ${response.status}`);
-  }
-
-  const data = await response.json() as { name?: string };
-  const savedName = typeof data.name === 'string' && data.name ? data.name : name;
-  upsertRuntimePreset(savedName, preset, triggerUi);
-  return savedName;
-}
-
-function upsertRuntimePreset(name: string, preset: Preset, triggerUi: boolean): void {
-  const names = openAiModule.openai_setting_names;
-  const settings = openAiModule.openai_settings;
-  if (!names || !settings) {
-    return;
-  }
-
-  if (typeof names[name] === 'number') {
-    settings[names[name]] = deepClone(preset);
-  } else {
-    settings.push(deepClone(preset));
-    names[name] = settings.length - 1;
-    addPresetOption(name, names[name]);
-  }
-
-  if (triggerUi) {
-    const oaiSettings = openAiModule.oai_settings;
-    if (oaiSettings) {
-      oaiSettings.preset_settings_openai = name;
-    }
-    const select = document.querySelector<HTMLSelectElement>('#settings_preset_openai');
-    if (select) {
-      select.value = String(names[name]);
-      if (typeof $ === 'function') {
-        $(select).trigger('change');
-      } else {
-        select.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-    }
-  }
-}
-
-function addPresetOption(name: string, value: number): void {
-  const select = document.querySelector<HTMLSelectElement>('#settings_preset_openai');
-  if (!select) {
-    return;
-  }
-  const option = document.createElement('option');
-  option.value = String(value);
-  option.textContent = name;
-  select.appendChild(option);
+  diagnose('preset-save-start', { name, triggerUi });
+  await helperCreateOrReplacePreset(name, deepClone(preset), { render: triggerUi ? 'immediate' : 'none' });
+  diagnose('preset-save-success', { name });
+  return name;
 }
 
 async function loadFavorites(): Promise<FavoriteEntry[]> {
-  const store = (window as TauriWindow).__TAURITAVERN__?.api?.extension?.store;
   try {
-    const stored = await store?.tryGetJson?.({ namespace: EXTENSION_NAMESPACE, table: FAVORITES_TABLE, key: FAVORITES_KEY });
-    if (stored?.found && Array.isArray(stored.value)) {
-      return stored.value as FavoriteEntry[];
-    }
-  } catch {
-    // Fall back to localStorage below.
-  }
-
-  try {
-    const raw = localStorage.getItem(`${EXTENSION_NAMESPACE}:${FAVORITES_TABLE}:${FAVORITES_KEY}`);
+    const raw = localStorage.getItem(`${STORAGE_NAMESPACE}:${FAVORITES_TABLE}:${FAVORITES_KEY}`);
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed as FavoriteEntry[] : [];
-  } catch {
+    const favorites = Array.isArray(parsed) ? parsed as FavoriteEntry[] : [];
+    diagnose('favorites-loaded', { count: favorites.length });
+    return favorites;
+  } catch (error) {
+    diagnose('favorites-load-error', { message: error instanceof Error ? error.message : String(error) });
     return [];
   }
 }
 
 async function saveFavorites(): Promise<void> {
-  const store = (window as TauriWindow).__TAURITAVERN__?.api?.extension?.store;
+  localStorage.setItem(`${STORAGE_NAMESPACE}:${FAVORITES_TABLE}:${FAVORITES_KEY}`, JSON.stringify(state.favorites));
+  diagnose('favorites-saved', { count: state.favorites.length });
+}
+
+function diagnose(stage: string, details?: Record<string, unknown>): void {
+  const entry: DebugEntry = {
+    at: new Date().toISOString(),
+    stage,
+    ...(details ? { details } : {}),
+  };
+  debugEntries = [...debugEntries, entry].slice(-DEBUG_ENTRY_LIMIT);
+
   try {
-    await store?.setJson?.({ namespace: EXTENSION_NAMESPACE, table: FAVORITES_TABLE, key: FAVORITES_KEY, value: state.favorites });
-    return;
+    console.info('[预设缝合管理器]', stage, details ?? {});
   } catch {
-    // Fall back to localStorage below.
+    // ignored
   }
-  localStorage.setItem(`${EXTENSION_NAMESPACE}:${FAVORITES_TABLE}:${FAVORITES_KEY}`, JSON.stringify(state.favorites));
+
+  try {
+    localStorage.setItem(DEBUG_STORAGE_KEY, JSON.stringify(debugEntries));
+  } catch {
+    // ignored
+  }
+
+  persistDiagnosticVariables();
+}
+
+function persistDiagnosticVariables(): void {
+  try {
+    const runtime = globalThis as unknown as RuntimeHost;
+    const getScriptIdFunction = runtime.getScriptId;
+    const insertOrAssignVariablesFunction = runtime.insertOrAssignVariables;
+    if (typeof getScriptIdFunction !== 'function' || typeof insertOrAssignVariablesFunction !== 'function') {
+      return;
+    }
+    insertOrAssignVariablesFunction.call(
+      runtime,
+      { [DEBUG_VARIABLE_KEY]: debugEntries },
+      { type: 'script', script_id: getScriptIdFunction.call(runtime) },
+    );
+  } catch {
+    // ignored
+  }
+}
+
+function getRuntimeDiagnostics(): Record<string, unknown> {
+  const runtime = globalThis as unknown as RuntimeHost;
+  const parentDocument = getParentDocument();
+  const parentWindow = parentDocument?.defaultView;
+  const parentBodyRect = parentDocument?.body.getBoundingClientRect();
+  return {
+    href: location.href,
+    readyState: document.readyState,
+    iframeWindowWidth: window.innerWidth,
+    iframeWindowHeight: window.innerHeight,
+    parentAccessible: Boolean(parentDocument),
+    parentWindowWidth: parentWindow?.innerWidth ?? null,
+    parentWindowHeight: parentWindow?.innerHeight ?? null,
+    parentBodyWidth: parentBodyRect ? roundPixel(parentBodyRect.width) : null,
+    parentBodyHeight: parentBodyRect ? roundPixel(parentBodyRect.height) : null,
+    hasJquery: typeof $ === 'function',
+    hasUpdateScriptButtonsWith: typeof runtime.updateScriptButtonsWith === 'function',
+    hasEventOn: typeof runtime.eventOn === 'function',
+    hasGetButtonEvent: typeof runtime.getButtonEvent === 'function',
+    hasGetScriptId: typeof runtime.getScriptId === 'function',
+    hasInsertOrAssignVariables: typeof runtime.insertOrAssignVariables === 'function',
+    hasTavernHelper: Boolean(runtime.TavernHelper),
+    hasHelperGetPresetNames: typeof runtime.TavernHelper?.getPresetNames === 'function',
+    hasGlobalGetPresetNames: typeof runtime.getPresetNames === 'function',
+  };
 }
 
 function onDragStart(event: DragEvent): void {
-  const target = event.target instanceof Element ? event.target : null;
+  const target = toElement(event.target);
   const row = target?.closest<HTMLElement>('.pm-row');
   if (!row || !event.dataTransfer) {
     return;
@@ -1117,7 +1444,7 @@ function onDragStart(event: DragEvent): void {
 }
 
 function onDragOver(event: DragEvent): void {
-  const target = event.target instanceof Element ? event.target : null;
+  const target = toElement(event.target);
   if (target?.closest('[data-drop-zone], .pm-row[data-entry-kind="target"]')) {
     event.preventDefault();
     updateDropMarker(event.clientX, event.clientY);
@@ -1145,7 +1472,7 @@ function onPointerDown(event: PointerEvent): void {
     return;
   }
 
-  const target = event.target instanceof Element ? event.target : null;
+  const target = toElement(event.target);
   if (!target || target.closest('button, input, select, textarea, a')) {
     return;
   }
@@ -1194,7 +1521,7 @@ function onPointerMove(event: PointerEvent): void {
 
   pointerDrag.dragging = true;
   pointerDrag.row.classList.add('pm-row-dragging');
-  document.getElementById(ROOT_ID)?.classList.add('pm-is-dragging');
+  getMountDocument().getElementById(ROOT_ID)?.classList.add('pm-is-dragging');
   updateDropMarker(event.clientX, event.clientY);
   event.preventDefault();
 }
@@ -1210,7 +1537,7 @@ function onPointerUp(event: PointerEvent): void {
     drag.row.releasePointerCapture(event.pointerId);
   }
   drag.row.classList.remove('pm-row-dragging');
-  document.getElementById(ROOT_ID)?.classList.remove('pm-is-dragging');
+  getMountDocument().getElementById(ROOT_ID)?.classList.remove('pm-is-dragging');
   clearDropMarkers();
 
   if (!drag.dragging) {
@@ -1228,7 +1555,7 @@ function onPointerCancel(event: PointerEvent): void {
   }
 
   pointerDrag.row.classList.remove('pm-row-dragging');
-  document.getElementById(ROOT_ID)?.classList.remove('pm-is-dragging');
+  getMountDocument().getElementById(ROOT_ID)?.classList.remove('pm-is-dragging');
   pointerDrag = null;
   clearDropMarkers();
 }
@@ -1264,7 +1591,7 @@ function applyDrop(kind: EntryKind, id: string, clientX: number, clientY: number
   if (kind === 'target') {
     movePromptToIndex(state.targetDraft, id, getAdjustedMoveIndex(id, location.index));
     state.selectedTargetId = id;
-    state.notice = '已重排目标草稿';
+    state.notice = '已重排目标预设';
   }
 
   state.dirty = true;
@@ -1273,7 +1600,7 @@ function applyDrop(kind: EntryKind, id: string, clientX: number, clientY: number
 }
 
 function getTargetDropLocation(clientX: number, clientY: number): DropLocation | null {
-  const target = document.elementFromPoint(clientX, clientY);
+  const target = getMountDocument().elementFromPoint(clientX, clientY);
   const targetRow = target?.closest<HTMLElement>('.pm-row[data-entry-kind="target"]') ?? null;
   const targetList = target?.closest<HTMLElement>('.pm-list[data-drop-zone="target"]') ?? null;
   if (!targetRow && !targetList) {
@@ -1322,7 +1649,7 @@ function updateDropMarker(clientX: number, clientY: number): void {
 }
 
 function clearDropMarkers(): void {
-  document
+  getMountDocument()
     .querySelectorAll<HTMLElement>('#tt-preset-stitcher-root .pm-row-drop-before, #tt-preset-stitcher-root .pm-row-drop-after')
     .forEach(row => row.classList.remove('pm-row-drop-before', 'pm-row-drop-after'));
 }
