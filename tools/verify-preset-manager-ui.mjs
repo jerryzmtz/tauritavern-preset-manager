@@ -74,6 +74,26 @@ const fixturePresets = [
   },
 ];
 
+for (let index = 0; index < 18; index += 1) {
+  const sourceId = `source-extra-${index}`;
+  const targetId = `target-extra-${index}`;
+  fixturePresets[0].preset.prompts.push({
+    identifier: sourceId,
+    name: `来源长列表条目 ${index + 1}`,
+    role: index % 3 === 0 ? 'user' : 'system',
+    content: `用于滚动与拖拽测试的来源正文 ${index + 1}\n特化：保持 UTF-8 中文。`,
+  });
+  fixturePresets[0].preset.prompt_order[0].order.push({ identifier: sourceId, enabled: index % 2 === 0 });
+
+  fixturePresets[1].preset.prompts.push({
+    identifier: targetId,
+    name: `目标长列表条目 ${index + 1}`,
+    role: 'system',
+    content: `用于目标草稿排序测试的正文 ${index + 1}`,
+  });
+  fixturePresets[1].preset.prompt_order[0].order.push({ identifier: targetId, enabled: index % 2 !== 0 });
+}
+
 function serveFixture() {
   let savedPreset = null;
   const server = createServer(async (request, response) => {
@@ -174,6 +194,98 @@ export function applySurface(element, surface){ element.dataset.ttMobileSurface 
   });
 }
 
+async function dragBetween(page, sourceLocator, targetLocator, placement = 'center') {
+  const sourceBox = await sourceLocator.boundingBox();
+  const targetBox = await targetLocator.boundingBox();
+  if (!sourceBox || !targetBox) {
+    throw new Error('拖拽测试无法取得元素位置');
+  }
+
+  const targetY = placement === 'after'
+    ? targetBox.y + targetBox.height - 3
+    : placement === 'end'
+      ? targetBox.y + targetBox.height - 12
+      : targetBox.y + targetBox.height / 2;
+
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(targetBox.x + targetBox.width / 2, targetY, { steps: 10 });
+  await page.mouse.up();
+}
+
+async function verifySelectionKeepsScroll(page, viewportName) {
+  const sourceList = page.locator('.pm-pane-source .pm-list');
+  await sourceList.evaluate(element => {
+    element.scrollTop = element.scrollHeight;
+  });
+  const before = await sourceList.evaluate(element => element.scrollTop);
+  if (before < 20) {
+    throw new Error(`${viewportName}: 来源列表没有形成可验证的滚动区域`);
+  }
+
+  await page.locator('.pm-pane-source .pm-row').last().click();
+  await page.waitForTimeout(50);
+  const after = await sourceList.evaluate(element => element.scrollTop);
+  if (Math.abs(after - before) > 4) {
+    throw new Error(`${viewportName}: 选择条目后列表滚动位置被重置`);
+  }
+}
+
+async function verifyDirectDragAndUnsavedClose(page, fixture, viewportName) {
+  const targetTitles = page.locator('.pm-pane-target .pm-row-title');
+  const originalTitles = await targetTitles.evaluateAll(nodes => nodes.slice(0, 3).map(node => node.textContent?.trim()));
+  if (originalTitles.length < 3) {
+    throw new Error(`${viewportName}: 目标列表条目不足，无法验证拖拽排序`);
+  }
+
+  await dragBetween(
+    page,
+    page.locator('.pm-pane-target .pm-row').first().locator('.pm-row-grip'),
+    page.locator('.pm-pane-target .pm-row').nth(1),
+    'after',
+  );
+
+  const reorderedTitles = await targetTitles.evaluateAll(nodes => nodes.slice(0, 3).map(node => node.textContent?.trim()));
+  if (reorderedTitles[1] !== originalTitles[0]) {
+    throw new Error(`${viewportName}: 目标草稿直接拖拽排序未生效`);
+  }
+
+  page.once('dialog', dialog => {
+    if (!dialog.message().includes('未保存草稿')) {
+      throw new Error(`${viewportName}: 关闭未保存草稿时没有明确提示`);
+    }
+    void dialog.accept();
+  });
+  await page.getByTitle('关闭').click();
+  await page.getByRole('button', { name: /打开预设缝合管理器/ }).click();
+  await page.locator('.pm-panel').waitFor({ state: 'visible' });
+
+  const reopenedTitles = await targetTitles.evaluateAll(nodes => nodes.slice(0, 3).map(node => node.textContent?.trim()));
+  if (reopenedTitles[0] !== originalTitles[0] || reopenedTitles[1] !== originalTitles[1]) {
+    throw new Error(`${viewportName}: 未保存排序在关闭后仍残留到草稿`);
+  }
+  if (fixture.getSavedPreset() !== null) {
+    throw new Error(`${viewportName}: 未点击保存却调用了保存接口`);
+  }
+
+  const sourceTitle = await page.locator('.pm-pane-source .pm-row-title').first().textContent();
+  const targetCountBefore = await page.locator('.pm-pane-target .pm-row').count();
+  await dragBetween(
+    page,
+    page.locator('.pm-pane-source .pm-row').first().locator('.pm-row-grip'),
+    page.locator('.pm-pane-target .pm-list'),
+    'end',
+  );
+  await page.waitForFunction(count => document.querySelectorAll('.pm-pane-target .pm-row').length > count, targetCountBefore);
+  const targetTitleTexts = await targetTitles.evaluateAll(nodes => nodes.map(node => node.textContent?.trim()));
+  if (!targetTitleTexts.includes(sourceTitle?.trim())) {
+    throw new Error(`${viewportName}: 来源条目无法直接拖入目标草稿`);
+  }
+  if (fixture.getSavedPreset() !== null) {
+    throw new Error(`${viewportName}: 拖拽草稿操作不应触发保存接口`);
+  }
+}
+
 const { chromium } = await importPlaywright();
 const fixture = await serveFixture();
 const executablePath = process.env.PRESET_MANAGER_CHROME
@@ -235,6 +347,12 @@ try {
     }
     await sourceSearch.fill('');
 
+    if (viewport.name === 'desktop-wide') {
+      await verifySelectionKeepsScroll(page, viewport.name);
+      await verifyDirectDragAndUnsavedClose(page, fixture, viewport.name);
+      await page.locator('input[name="sourceQuery"]').fill('');
+    }
+
     if (viewport.width < 768) {
       await page.getByRole('button', { name: '来源', exact: true }).click();
       await page.getByTitle('复制到目标').first().click();
@@ -244,7 +362,7 @@ try {
     }
 
     await page.getByText('📔小说').last().waitFor();
-    const accentColor = await page.locator('.pm-row.is-selected').evaluate(element => getComputedStyle(element).borderColor);
+    const accentColor = await page.locator('.pm-pane-target .pm-row.is-selected').evaluate(element => getComputedStyle(element).borderColor);
     if (!accentColor || accentColor === 'rgba(0, 0, 0, 0)') {
       throw new Error(`${viewport.name}: 主题色未应用到选中状态`);
     }

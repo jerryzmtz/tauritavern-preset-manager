@@ -307,6 +307,11 @@
   background: color-mix(in srgb, var(--pm-surface-soft) 62%, transparent);
 }
 
+.pm-is-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
 .pm-row:hover,
 .pm-row:focus-visible,
 .pm-row.is-selected {
@@ -316,7 +321,25 @@
 
 .pm-row-grip {
   color: var(--pm-faint);
+  cursor: grab;
   text-align: center;
+  touch-action: none;
+}
+
+.pm-row-main {
+  cursor: grab;
+}
+
+.pm-row-dragging {
+  opacity: 0.58;
+}
+
+.pm-row-drop-before {
+  box-shadow: inset 0 2px 0 var(--pm-accent);
+}
+
+.pm-row-drop-after {
+  box-shadow: inset 0 -2px 0 var(--pm-accent);
 }
 
 .pm-row-title {

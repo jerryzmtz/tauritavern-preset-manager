@@ -25,6 +25,27 @@ type MobileTab = 'source' | 'target' | 'favorites' | 'preview';
 type EntryKind = 'source' | 'target' | 'favorite';
 type FilterValue = 'all' | 'enabled' | 'disabled' | 'system' | 'user' | 'assistant';
 
+interface RenderScrollSnapshot {
+  key: string;
+  top: number;
+  left: number;
+}
+
+interface PointerDragState {
+  pointerId: number;
+  kind: EntryKind;
+  id: string;
+  row: HTMLElement;
+  startX: number;
+  startY: number;
+  dragging: boolean;
+}
+
+interface DropLocation {
+  index: number;
+  row: HTMLElement | null;
+}
+
 interface ExtensionStore {
   tryGetJson?: (input: { namespace: string; table?: string; key: string }) => Promise<{ found: boolean; value?: unknown }>;
   setJson?: (input: { namespace: string; table?: string; key: string; value: unknown }) => Promise<void>;
@@ -110,6 +131,8 @@ let scriptModule: ScriptModule = {};
 let openAiModule: OpenAiModule = {};
 let layoutKit: { waitForHostReady?: () => Promise<void>; SURFACE?: Record<string, string>; applySurface?: (element: Element, surface: string) => void } = {};
 let isComposingInput = false;
+let pointerDrag: PointerDragState | null = null;
+let suppressNextClick = false;
 
 void boot();
 
@@ -156,6 +179,9 @@ function createLauncher(): void {
 
 async function openManager(): Promise<void> {
   clearMessage();
+  state.targetDraft = null;
+  state.targetOriginal = null;
+  state.dirty = false;
   hydratePresetList();
   state.isOpen = true;
   render();
@@ -204,6 +230,7 @@ function render(): void {
     return;
   }
 
+  const scrollSnapshot = captureScrollSnapshot(existing);
   const root = existing ?? document.createElement('div');
   root.id = ROOT_ID;
   root.innerHTML = renderDialog();
@@ -218,10 +245,64 @@ function render(): void {
     root.addEventListener('dragover', onDragOver);
     root.addEventListener('drop', onDrop);
     root.addEventListener('keydown', onKeyDown);
+    root.addEventListener('pointerdown', onPointerDown);
+    root.addEventListener('pointermove', onPointerMove);
+    root.addEventListener('pointerup', onPointerUp);
+    root.addEventListener('pointercancel', onPointerCancel);
     document.body.appendChild(root);
   }
 
   applyMobileSurfaces(root);
+  restoreScrollSnapshot(root, scrollSnapshot);
+}
+
+function captureScrollSnapshot(root: HTMLElement | null): RenderScrollSnapshot[] {
+  if (!root) {
+    return [];
+  }
+
+  return [...root.querySelectorAll<HTMLElement>('.pm-body, .pm-list[data-drop-zone]')]
+    .map(element => ({
+      key: getScrollKey(element),
+      top: element.scrollTop,
+      left: element.scrollLeft,
+    }))
+    .filter((item): item is RenderScrollSnapshot => Boolean(item.key));
+}
+
+function restoreScrollSnapshot(root: HTMLElement, snapshot: RenderScrollSnapshot[]): void {
+  for (const item of snapshot) {
+    const element = findScrollElement(root, item.key);
+    if (!element) {
+      continue;
+    }
+    element.scrollTop = item.top;
+    element.scrollLeft = item.left;
+  }
+}
+
+function getScrollKey(element: HTMLElement): string {
+  if (element.classList.contains('pm-body')) {
+    return 'body';
+  }
+  const dropZone = element.dataset.dropZone;
+  return dropZone ? `drop:${dropZone}` : '';
+}
+
+function findScrollElement(root: HTMLElement, key: string): HTMLElement | null {
+  if (key === 'body') {
+    return root.querySelector<HTMLElement>('.pm-body');
+  }
+  if (key === 'drop:source') {
+    return root.querySelector<HTMLElement>('.pm-list[data-drop-zone="source"]');
+  }
+  if (key === 'drop:target') {
+    return root.querySelector<HTMLElement>('.pm-list[data-drop-zone="target"]');
+  }
+  if (key === 'drop:favorite') {
+    return root.querySelector<HTMLElement>('.pm-list[data-drop-zone="favorite"]');
+  }
+  return null;
 }
 
 function applyMobileSurfaces(root: HTMLElement): void {
@@ -377,8 +458,8 @@ function renderEntryRow(kind: 'source' | 'target', entry: PromptEntry, index: nu
     `;
 
   return `
-    <div class="pm-row ${selected}" role="button" tabindex="0" draggable="true" data-entry-kind="${kind}" data-id="${escapeAttr(entry.id)}" data-index="${index}">
-      <div class="pm-row-grip" aria-hidden="true"><i class="fa-solid fa-grip-lines"></i></div>
+    <div class="pm-row ${selected}" role="button" tabindex="0" data-entry-kind="${kind}" data-id="${escapeAttr(entry.id)}" data-index="${index}">
+      <div class="pm-row-grip" data-drag-handle="true" aria-hidden="true" title="拖拽条目"><i class="fa-solid fa-grip-lines"></i></div>
       <div class="pm-row-main">
         <div class="pm-row-title">${escapeHtml(entry.name)}</div>
         <div class="pm-row-meta">
@@ -423,8 +504,8 @@ function renderFavorites(favorites: FavoriteEntry[]): string {
 function renderFavoriteRow(favorite: FavoriteEntry): string {
   const selected = state.selectedFavoriteId === favorite.id ? 'is-selected' : '';
   return `
-    <div class="pm-row pm-row-favorite ${selected}" role="button" tabindex="0" draggable="true" data-entry-kind="favorite" data-id="${escapeAttr(favorite.id)}">
-      <div class="pm-row-grip" aria-hidden="true"><i class="fa-solid fa-bookmark"></i></div>
+    <div class="pm-row pm-row-favorite ${selected}" role="button" tabindex="0" data-entry-kind="favorite" data-id="${escapeAttr(favorite.id)}">
+      <div class="pm-row-grip" data-drag-handle="true" aria-hidden="true" title="拖拽条目"><i class="fa-solid fa-bookmark"></i></div>
       <div class="pm-row-main">
         <div class="pm-row-title">${escapeHtml(favorite.name)}</div>
         <div class="pm-row-meta">
@@ -560,6 +641,14 @@ function onRootClick(event: MouseEvent): void {
     return;
   }
 
+  if (suppressNextClick) {
+    suppressNextClick = false;
+    if (target.closest('.pm-row')) {
+      event.preventDefault();
+      return;
+    }
+  }
+
   const actionElement = target.closest<HTMLElement>('[data-action]');
   const row = target.closest<HTMLElement>('.pm-row');
 
@@ -586,6 +675,10 @@ function onRootChange(event: Event): void {
   }
 
   if (target.name === 'targetName') {
+    if (state.dirty && target.value !== state.targetName && !window.confirm('切换目标预设会放弃当前未保存草稿。继续切换？')) {
+      target.value = state.targetName;
+      return;
+    }
     state.targetName = target.value;
     resetTargetDraft();
   }
@@ -684,8 +777,7 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
   switch (action) {
     case 'backdrop-close':
     case 'close':
-      state.isOpen = false;
-      render();
+      closeManager();
       return;
     case 'refresh':
       await loadRuntimeModules();
@@ -747,6 +839,20 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
     default:
       return;
   }
+}
+
+function closeManager(): void {
+  if (state.dirty && !window.confirm('关闭会放弃当前未保存草稿。继续关闭？')) {
+    render();
+    return;
+  }
+
+  if (state.dirty) {
+    resetTargetDraft();
+  }
+
+  state.isOpen = false;
+  render();
 }
 
 function selectRow(row: HTMLElement): void {
@@ -1014,45 +1120,211 @@ function onDragOver(event: DragEvent): void {
   const target = event.target instanceof Element ? event.target : null;
   if (target?.closest('[data-drop-zone], .pm-row[data-entry-kind="target"]')) {
     event.preventDefault();
+    updateDropMarker(event.clientX, event.clientY);
   }
 }
 
 function onDrop(event: DragEvent): void {
   event.preventDefault();
+  clearDropMarkers();
   const raw = event.dataTransfer?.getData('application/x-preset-manager');
   if (!raw || !state.targetDraft) {
     return;
   }
 
   const payload = JSON.parse(raw) as { kind?: EntryKind; id?: string };
+  if (!payload.kind || !payload.id) {
+    return;
+  }
+
+  applyDrop(payload.kind, payload.id, event.clientX, event.clientY);
+}
+
+function onPointerDown(event: PointerEvent): void {
+  if (event.button !== 0 && event.pointerType === 'mouse') {
+    return;
+  }
+
   const target = event.target instanceof Element ? event.target : null;
-  const targetRow = target?.closest<HTMLElement>('.pm-row[data-entry-kind="target"]');
-  const targetIndex = targetRow ? Number(targetRow.dataset.index) : undefined;
+  if (!target || target.closest('button, input, select, textarea, a')) {
+    return;
+  }
 
-  if (payload.kind === 'source' && payload.id) {
-    const sourceEntry = getSourceEntries().find(entry => entry.id === payload.id);
-    if (sourceEntry) {
-      state.selectedTargetId = insertPromptFromEntry(state.targetDraft, sourceEntry, targetIndex);
-      state.dirty = true;
+  const fromHandle = Boolean(target.closest('[data-drag-handle]'));
+  if (event.pointerType !== 'mouse' && !fromHandle) {
+    return;
+  }
+
+  const row = target.closest<HTMLElement>('.pm-row');
+  if (!row) {
+    return;
+  }
+
+  const kind = row.dataset.entryKind as EntryKind | undefined;
+  const id = row.dataset.id;
+  if (!kind || !id) {
+    return;
+  }
+
+  pointerDrag = {
+    pointerId: event.pointerId,
+    kind,
+    id,
+    row,
+    startX: event.clientX,
+    startY: event.clientY,
+    dragging: false,
+  };
+
+  row.setPointerCapture?.(event.pointerId);
+  if (event.pointerType === 'mouse' || fromHandle) {
+    event.preventDefault();
+  }
+}
+
+function onPointerMove(event: PointerEvent): void {
+  if (!pointerDrag || pointerDrag.pointerId !== event.pointerId) {
+    return;
+  }
+
+  const moved = Math.hypot(event.clientX - pointerDrag.startX, event.clientY - pointerDrag.startY);
+  if (!pointerDrag.dragging && moved < 6) {
+    return;
+  }
+
+  pointerDrag.dragging = true;
+  pointerDrag.row.classList.add('pm-row-dragging');
+  document.getElementById(ROOT_ID)?.classList.add('pm-is-dragging');
+  updateDropMarker(event.clientX, event.clientY);
+  event.preventDefault();
+}
+
+function onPointerUp(event: PointerEvent): void {
+  if (!pointerDrag || pointerDrag.pointerId !== event.pointerId) {
+    return;
+  }
+
+  const drag = pointerDrag;
+  pointerDrag = null;
+  if (drag.row.hasPointerCapture?.(event.pointerId)) {
+    drag.row.releasePointerCapture(event.pointerId);
+  }
+  drag.row.classList.remove('pm-row-dragging');
+  document.getElementById(ROOT_ID)?.classList.remove('pm-is-dragging');
+  clearDropMarkers();
+
+  if (!drag.dragging) {
+    return;
+  }
+
+  suppressNextClick = true;
+  event.preventDefault();
+  applyDrop(drag.kind, drag.id, event.clientX, event.clientY);
+}
+
+function onPointerCancel(event: PointerEvent): void {
+  if (!pointerDrag || pointerDrag.pointerId !== event.pointerId) {
+    return;
+  }
+
+  pointerDrag.row.classList.remove('pm-row-dragging');
+  document.getElementById(ROOT_ID)?.classList.remove('pm-is-dragging');
+  pointerDrag = null;
+  clearDropMarkers();
+}
+
+function applyDrop(kind: EntryKind, id: string, clientX: number, clientY: number): void {
+  if (!state.targetDraft) {
+    return;
+  }
+
+  const location = getTargetDropLocation(clientX, clientY);
+  if (!location) {
+    return;
+  }
+
+  if (kind === 'source') {
+    const sourceEntry = getSourceEntries().find(entry => entry.id === id);
+    if (!sourceEntry) {
+      return;
     }
+    state.selectedTargetId = insertPromptFromEntry(state.targetDraft, sourceEntry, location.index);
+    state.notice = `已拖入：${sourceEntry.name}`;
   }
 
-  if (payload.kind === 'favorite' && payload.id) {
-    const favorite = state.favorites.find(entry => entry.id === payload.id);
-    if (favorite) {
-      state.selectedTargetId = insertPromptFromEntry(state.targetDraft, favorite, targetIndex);
-      state.dirty = true;
+  if (kind === 'favorite') {
+    const favorite = state.favorites.find(entry => entry.id === id);
+    if (!favorite) {
+      return;
     }
+    state.selectedTargetId = insertPromptFromEntry(state.targetDraft, favorite, location.index);
+    state.notice = `已从收藏拖入：${favorite.name}`;
   }
 
-  if (payload.kind === 'target' && payload.id && typeof targetIndex === 'number') {
-    movePromptToIndex(state.targetDraft, payload.id, targetIndex);
-    state.selectedTargetId = payload.id;
-    state.dirty = true;
+  if (kind === 'target') {
+    movePromptToIndex(state.targetDraft, id, getAdjustedMoveIndex(id, location.index));
+    state.selectedTargetId = id;
+    state.notice = '已重排目标草稿';
   }
 
+  state.dirty = true;
   state.activeTab = 'target';
   render();
+}
+
+function getTargetDropLocation(clientX: number, clientY: number): DropLocation | null {
+  const target = document.elementFromPoint(clientX, clientY);
+  const targetRow = target?.closest<HTMLElement>('.pm-row[data-entry-kind="target"]') ?? null;
+  const targetList = target?.closest<HTMLElement>('.pm-list[data-drop-zone="target"]') ?? null;
+  if (!targetRow && !targetList) {
+    return null;
+  }
+
+  if (!targetRow) {
+    return {
+      index: state.targetDraft ? listPromptEntries(state.targetDraft).length : 0,
+      row: null,
+    };
+  }
+
+  return {
+    index: getDropIndex(targetRow, clientY),
+    row: targetRow,
+  };
+}
+
+function getDropIndex(row: HTMLElement, clientY: number): number {
+  const rowIndex = Number(row.dataset.index);
+  if (!Number.isFinite(rowIndex)) {
+    return state.targetDraft ? listPromptEntries(state.targetDraft).length : 0;
+  }
+  const rect = row.getBoundingClientRect();
+  return clientY > rect.top + rect.height / 2 ? rowIndex + 1 : rowIndex;
+}
+
+function getAdjustedMoveIndex(id: string, dropIndex: number): number {
+  if (!state.targetDraft) {
+    return dropIndex;
+  }
+  const currentIndex = listPromptEntries(state.targetDraft).findIndex(entry => entry.id === id);
+  return currentIndex >= 0 && currentIndex < dropIndex ? dropIndex - 1 : dropIndex;
+}
+
+function updateDropMarker(clientX: number, clientY: number): void {
+  clearDropMarkers();
+  const location = getTargetDropLocation(clientX, clientY);
+  if (!location?.row) {
+    return;
+  }
+
+  const rect = location.row.getBoundingClientRect();
+  location.row.classList.add(clientY > rect.top + rect.height / 2 ? 'pm-row-drop-after' : 'pm-row-drop-before');
+}
+
+function clearDropMarkers(): void {
+  document
+    .querySelectorAll<HTMLElement>('#tt-preset-stitcher-root .pm-row-drop-before, #tt-preset-stitcher-root .pm-row-drop-after')
+    .forEach(row => row.classList.remove('pm-row-drop-before', 'pm-row-drop-after'));
 }
 
 function clearMessage(): void {
