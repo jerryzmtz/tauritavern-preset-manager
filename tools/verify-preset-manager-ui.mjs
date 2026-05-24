@@ -94,8 +94,32 @@ for (let index = 0; index < 18; index += 1) {
   fixturePresets[1].preset.prompt_order[0].order.push({ identifier: targetId, enabled: index % 2 !== 0 });
 }
 
-function serveFixture() {
+function listen(server) {
+  return new Promise(resolve => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (typeof address === 'object' && address) {
+        resolve(`http://127.0.0.1:${address.port}`);
+      }
+    });
+  });
+}
+
+async function serveFixture() {
   let savedPreset = null;
+  const cdnServer = createServer(async (request, response) => {
+    const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+    response.setHeader('Access-Control-Allow-Origin', '*');
+    if (url.pathname === '/dist/preset-manager/index.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' });
+      response.end(await readFile(bundlePath, 'utf8'));
+      return;
+    }
+    response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    response.end('cdn not found');
+  });
+  const cdnUrl = await listen(cdnServer);
+
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
     response.setHeader('Access-Control-Allow-Origin', '*');
@@ -170,13 +194,7 @@ function serveFixture() {
 
     if (url.pathname === '/script-entry.js') {
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' });
-      response.end(`import '/dist/preset-manager/index.js';`);
-      return;
-    }
-
-    if (url.pathname === '/dist/preset-manager/index.js') {
-      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' });
-      response.end(await readFile(bundlePath, 'utf8'));
+      response.end(`import '${cdnUrl}/dist/preset-manager/index.js';`);
       return;
     }
 
@@ -217,14 +235,18 @@ export function applySurface(element, surface){ element.dataset.ttMobileSurface 
     response.end('not found');
   });
 
-  return new Promise(resolve => {
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      if (typeof address === 'object' && address) {
-        resolve({ server, url: `http://127.0.0.1:${address.port}`, getSavedPreset: () => savedPreset });
-      }
-    });
-  });
+  const appUrl = await listen(server);
+  return {
+    server: {
+      close() {
+        server.close();
+        cdnServer.close();
+      },
+    },
+    url: appUrl,
+    cdnUrl,
+    getSavedPreset: () => savedPreset,
+  };
 }
 
 async function openManagerFromHelperButton(page) {

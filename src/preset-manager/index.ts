@@ -170,7 +170,7 @@ async function openManagerFromScript(): Promise<void> {
 async function waitForHost(): Promise<void> {
   const tauriWindow = window as TauriWindow;
   try {
-    layoutKit = await import(/* webpackIgnore: true */ '/scripts/tauritavern/layout-kit.js') as typeof layoutKit;
+    layoutKit = await import(/* webpackIgnore: true */ hostModuleUrl('/scripts/tauritavern/layout-kit.js')) as typeof layoutKit;
     await layoutKit.waitForHostReady?.();
   } catch {
     await (tauriWindow.__TAURITAVERN__?.ready ?? tauriWindow.__TAURITAVERN_MAIN_READY__ ?? Promise.resolve());
@@ -178,8 +178,12 @@ async function waitForHost(): Promise<void> {
 }
 
 async function loadRuntimeModules(): Promise<void> {
-  scriptModule = await import(/* webpackIgnore: true */ '/script.js') as ScriptModule;
-  openAiModule = await import(/* webpackIgnore: true */ '/scripts/openai.js') as OpenAiModule;
+  scriptModule = await import(/* webpackIgnore: true */ hostModuleUrl('/script.js')) as ScriptModule;
+  openAiModule = await import(/* webpackIgnore: true */ hostModuleUrl('/scripts/openai.js')) as OpenAiModule;
+}
+
+function hostModuleUrl(path: string): string {
+  return new URL(path, window.location.href).href;
 }
 
 async function openManager(): Promise<void> {
