@@ -40,7 +40,7 @@ const fixturePresets = [
     name: '雪月agent_v1（自改）',
     preset: {
       prompts: [
-        { identifier: 'source-novel', name: '📔小说', role: 'system', content: '基调：叙事性小说\n细节：保持真实感。' },
+        { identifier: 'source-novel', name: '📔小说', role: 'system', content: '基调：叙事性小说\n特化：保持真实感。' },
         { identifier: 'source-light', name: '📕轻小说', role: 'system', content: '基调：日式轻文学\n人称：第一人称。' },
       ],
       prompt_order: [
@@ -203,6 +203,37 @@ try {
     if (!saveBox || saveBox.x < 0 || saveBox.y < 0 || saveBox.x + saveBox.width > viewport.width + 1 || saveBox.y + saveBox.height > viewport.height + 1) {
       throw new Error(`${viewport.name}: 保存按钮不可达`);
     }
+
+    const sourceSearch = page.locator('input[name="sourceQuery"]');
+    await sourceSearch.focus();
+    const composingState = await sourceSearch.evaluate(element => {
+      element.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }));
+      element.value = 't';
+      element.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        data: 't',
+        inputType: 'insertCompositionText',
+        isComposing: true,
+      }));
+      return {
+        active: document.activeElement === element,
+        connected: element.isConnected,
+        value: element.value,
+      };
+    });
+    if (!composingState.active || !composingState.connected || composingState.value !== 't') {
+      throw new Error(`${viewport.name}: IME 组合输入时搜索框被重渲染替换`);
+    }
+
+    await sourceSearch.evaluate(element => {
+      element.value = '特化';
+      element.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '特化' }));
+    });
+    const imeValue = await sourceSearch.inputValue();
+    if (imeValue !== '特化') {
+      throw new Error(`${viewport.name}: IME 中文输入提交失败`);
+    }
+    await sourceSearch.fill('');
 
     if (viewport.width < 768) {
       await page.getByRole('button', { name: '来源', exact: true }).click();

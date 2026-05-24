@@ -109,6 +109,7 @@ const state: AppState = {
 let scriptModule: ScriptModule = {};
 let openAiModule: OpenAiModule = {};
 let layoutKit: { waitForHostReady?: () => Promise<void>; SURFACE?: Record<string, string>; applySurface?: (element: Element, surface: string) => void } = {};
+let isComposingInput = false;
 
 void boot();
 
@@ -211,6 +212,8 @@ function render(): void {
     root.addEventListener('click', onRootClick);
     root.addEventListener('change', onRootChange);
     root.addEventListener('input', onRootInput);
+    root.addEventListener('compositionstart', onCompositionStart);
+    root.addEventListener('compositionend', onCompositionEnd);
     root.addEventListener('dragstart', onDragStart);
     root.addEventListener('dragover', onDragOver);
     root.addEventListener('drop', onDrop);
@@ -604,6 +607,34 @@ function onRootInput(event: Event): void {
     return;
   }
 
+  updateInputState(target);
+
+  if (isComposingInput || (event instanceof InputEvent && event.isComposing)) {
+    return;
+  }
+
+  renderPreservingInput(target);
+}
+
+function onCompositionStart(event: CompositionEvent): void {
+  if (event.target instanceof HTMLInputElement && isManagedInput(event.target)) {
+    isComposingInput = true;
+  }
+}
+
+function onCompositionEnd(event: CompositionEvent): void {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement) || !isManagedInput(target)) {
+    isComposingInput = false;
+    return;
+  }
+
+  isComposingInput = false;
+  updateInputState(target);
+  renderPreservingInput(target);
+}
+
+function updateInputState(target: HTMLInputElement): void {
   if (target.name === 'sourceQuery') {
     state.sourceQuery = target.value;
   }
@@ -613,7 +644,28 @@ function onRootInput(event: Event): void {
   if (target.name === 'favoriteQuery') {
     state.favoriteQuery = target.value;
   }
+}
+
+function isManagedInput(target: HTMLInputElement): boolean {
+  return ['sourceQuery', 'targetQuery', 'favoriteQuery'].includes(target.name);
+}
+
+function renderPreservingInput(target: HTMLInputElement): void {
+  const name = target.name;
+  const selectionStart = target.selectionStart;
+  const selectionEnd = target.selectionEnd;
+
   render();
+
+  const replacement = document.querySelector<HTMLInputElement>(`#${ROOT_ID} input[name="${CSS.escape(name)}"]`);
+  if (!replacement) {
+    return;
+  }
+
+  replacement.focus();
+  if (selectionStart !== null && selectionEnd !== null) {
+    replacement.setSelectionRange(selectionStart, selectionEnd);
+  }
 }
 
 function onKeyDown(event: KeyboardEvent): void {
