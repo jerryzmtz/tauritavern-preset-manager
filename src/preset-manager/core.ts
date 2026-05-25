@@ -124,9 +124,7 @@ export function deepClone<T>(value: T): T {
 
 export function materializePreset(preset: Preset): Preset {
   const materialized = materializeRecord(preset) as Preset;
-  materialized.prompts = Array.isArray(preset.prompts)
-    ? preset.prompts.map(prompt => materializePrompt(prompt))
-    : [];
+  materialized.prompts = Array.isArray(preset.prompts) ? preset.prompts.map(prompt => materializePrompt(prompt)) : [];
   materialized.prompt_order = Array.isArray(preset.prompt_order)
     ? preset.prompt_order.map(promptOrder => materializePromptOrder(promptOrder))
     : [];
@@ -228,11 +226,10 @@ export function ensurePresetShape(preset: Preset): Preset {
 }
 
 function isRuntimePresetShape(preset: Preset): boolean {
-  return Array.isArray(preset.prompts)
-    && (
-      !Array.isArray(preset.prompt_order)
-      || preset.prompts.some(prompt => typeof prompt.id === 'string' && prompt.id)
-    );
+  return (
+    Array.isArray(preset.prompts) &&
+    (!Array.isArray(preset.prompt_order) || preset.prompts.some(prompt => typeof prompt.id === 'string' && prompt.id))
+  );
 }
 
 function assignPromptIdentifier(prompt: Prompt, identifier: string, runtimeShape: boolean): void {
@@ -251,8 +248,9 @@ export function getPrimaryPromptOrder(preset: Preset, create = false): PromptOrd
     preset.prompt_order = [];
   }
 
-  const promptOrder = preset.prompt_order.find(item => String(item.character_id) === String(GLOBAL_PROMPT_ORDER_ID))
-    ?? preset.prompt_order.find(item => Array.isArray(item.order));
+  const promptOrder =
+    preset.prompt_order.find(item => String(item.character_id) === String(GLOBAL_PROMPT_ORDER_ID)) ??
+    preset.prompt_order.find(item => Array.isArray(item.order));
 
   if (promptOrder) {
     if (!Array.isArray(promptOrder.order)) {
@@ -287,9 +285,7 @@ export function listPromptEntries(preset: Preset): PromptEntry[] {
     }
   }
 
-  const canRecoverIdsByOrder = prompts.length > 0
-    && promptById.size === 0
-    && order.length > 0;
+  const canRecoverIdsByOrder = prompts.length > 0 && promptById.size === 0 && order.length > 0;
 
   const entries: PromptEntry[] = [];
   const seen = new Set<string>();
@@ -342,7 +338,11 @@ export function toPromptEntry(
   };
 }
 
-export function insertPromptFromEntry(targetPreset: Preset, entry: PromptEntry | FavoriteEntry, insertIndex?: number): string {
+export function insertPromptFromEntry(
+  targetPreset: Preset,
+  entry: PromptEntry | FavoriteEntry,
+  insertIndex?: number,
+): string {
   const shaped = ensurePresetShape(targetPreset);
   const runtimeShape = isRuntimePresetShape(shaped);
   const prompt = deepClone(entry.prompt);
@@ -446,15 +446,12 @@ export function movePromptsToIndex(targetPreset: Preset, identifiers: string[], 
     if (!moving.length) {
       return;
     }
-    const selectedBeforeDrop = prompts.slice(0, normalizedIndex)
+    const selectedBeforeDrop = prompts
+      .slice(0, normalizedIndex)
       .filter(prompt => movingIds.has(getPromptIdentifier(prompt))).length;
     const remaining = prompts.filter(prompt => !movingIds.has(getPromptIdentifier(prompt)));
     const insertIndex = normalizeInsertIndex(normalizedIndex - selectedBeforeDrop, remaining.length);
-    shaped.prompts = [
-      ...remaining.slice(0, insertIndex),
-      ...moving,
-      ...remaining.slice(insertIndex),
-    ];
+    shaped.prompts = [...remaining.slice(0, insertIndex), ...moving, ...remaining.slice(insertIndex)];
     return;
   }
 
@@ -505,13 +502,13 @@ export function setPromptRole(targetPreset: Preset, identifier: string, role: st
 
 export function validatePreset(preset: Preset): PresetValidation {
   const prompts = Array.isArray(preset.prompts) ? preset.prompts : [];
-  const order = isRuntimePresetShape(preset) ? [] : getPrimaryPromptOrder(preset, false)?.order ?? [];
-  const ids = prompts.map(prompt => getPromptIdentifier(prompt)).filter((id): id is string => typeof id === 'string' && id.length > 0);
+  const order = isRuntimePresetShape(preset) ? [] : (getPrimaryPromptOrder(preset, false)?.order ?? []);
+  const ids = prompts
+    .map(prompt => getPromptIdentifier(prompt))
+    .filter((id): id is string => typeof id === 'string' && id.length > 0);
   const idSet = new Set(ids);
   const duplicateIdentifiers = ids.filter((id, index) => ids.indexOf(id) !== index);
-  const missingOrderReferences = order
-    .map(entry => entry.identifier)
-    .filter(identifier => !idSet.has(identifier));
+  const missingOrderReferences = order.map(entry => entry.identifier).filter(identifier => !idSet.has(identifier));
   const promptsWithoutIdentifiers = prompts.length - ids.length;
 
   return {
@@ -721,7 +718,11 @@ function normalizeCompareContent(content: string): string {
 
 function getUniqueIdentifier(preset: Preset, preferred: string | undefined): string {
   const prompts = Array.isArray(preset.prompts) ? preset.prompts : [];
-  const used = new Set(prompts.map(prompt => getPromptIdentifier(prompt)).filter((id): id is string => typeof id === 'string' && id.length > 0));
+  const used = new Set(
+    prompts
+      .map(prompt => getPromptIdentifier(prompt))
+      .filter((id): id is string => typeof id === 'string' && id.length > 0),
+  );
   if (preferred && !used.has(preferred)) {
     return preferred;
   }

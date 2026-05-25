@@ -1505,35 +1505,65 @@ function getCompareRowClass(pair: PromptComparePair | null): string {
   return pair.changedFields.includes('content') ? 'is-compare-content-different' : '';
 }
 
+interface CompareBadge {
+  label: string;
+  tone: 'strong' | 'soft';
+}
+
+interface CompareBadgeOptions {
+  kind?: 'source' | 'target';
+  includeSameContent?: boolean;
+  emptyLabel?: string;
+}
+
 function renderCompareBadges(pair: PromptComparePair | null, kind: 'source' | 'target'): string {
-  if (!state.compareMode || !pair) {
+  if (!state.compareMode) {
     return '';
   }
+  return renderCompareStatusBadges(pair, { kind });
+}
 
-  const badges: string[] = [];
-  if (pair.status === 'source_only') {
-    badges.push(renderCompareBadge(kind === 'source' ? '仅来源' : '未匹配', 'strong'));
-  } else if (pair.status === 'target_only') {
-    badges.push(renderCompareBadge(kind === 'target' ? '仅目标' : '未匹配', 'strong'));
-  } else {
-    if (pair.matchKind === 'name') {
-      badges.push(renderCompareBadge('同名匹配', 'soft'));
-    }
-    if (pair.changedFields.includes('content')) {
-      badges.push(renderCompareBadge('正文不同', 'strong'));
-    }
-    if (pair.changedFields.includes('name')) {
-      badges.push(renderCompareBadge('标题', 'soft'));
-    }
-    if (pair.changedFields.includes('role')) {
-      badges.push(renderCompareBadge('角色', 'soft'));
-    }
-    if (pair.changedFields.includes('enabled')) {
-      badges.push(renderCompareBadge('开关', 'soft'));
-    }
+function renderCompareDetailBadges(pair: PromptComparePair | null): string {
+  return renderCompareStatusBadges(pair, { includeSameContent: true, emptyLabel: '未选择' });
+}
+
+function renderCompareStatusBadges(pair: PromptComparePair | null, options: CompareBadgeOptions = {}): string {
+  return getCompareStatusBadges(pair, options)
+    .map(badge => renderCompareBadge(badge.label, badge.tone))
+    .join('');
+}
+
+function getCompareStatusBadges(pair: PromptComparePair | null, options: CompareBadgeOptions): CompareBadge[] {
+  if (!pair) {
+    return options.emptyLabel ? [{ label: options.emptyLabel, tone: 'soft' }] : [];
   }
 
-  return badges.join('');
+  if (pair.status === 'source_only') {
+    return [{ label: options.kind === 'target' ? '未匹配' : '仅来源', tone: 'strong' }];
+  }
+  if (pair.status === 'target_only') {
+    return [{ label: options.kind === 'source' ? '未匹配' : '仅目标', tone: 'strong' }];
+  }
+
+  const badges: CompareBadge[] = [];
+  if (pair.matchKind === 'name') {
+    badges.push({ label: '同名匹配', tone: 'soft' });
+  }
+  if (pair.changedFields.includes('content')) {
+    badges.push({ label: '正文不同', tone: 'strong' });
+  } else if (options.includeSameContent) {
+    badges.push({ label: '正文相同', tone: 'soft' });
+  }
+  if (pair.changedFields.includes('name')) {
+    badges.push({ label: '标题', tone: 'soft' });
+  }
+  if (pair.changedFields.includes('role')) {
+    badges.push({ label: '角色', tone: 'soft' });
+  }
+  if (pair.changedFields.includes('enabled')) {
+    badges.push({ label: '开关', tone: 'soft' });
+  }
+  return badges;
 }
 
 function renderCompareBadge(label: string, tone: 'strong' | 'soft'): string {
@@ -1672,37 +1702,6 @@ function renderCompareDetail(selection: DetailSelection | null, pair: PromptComp
       </div>
     </section>
   `;
-}
-
-function renderCompareDetailBadges(pair: PromptComparePair | null): string {
-  if (!pair) {
-    return '<span class="pm-compare-badge soft">未选择</span>';
-  }
-  if (pair.status === 'source_only') {
-    return renderCompareBadge('仅来源', 'strong');
-  }
-  if (pair.status === 'target_only') {
-    return renderCompareBadge('仅目标', 'strong');
-  }
-  const badges: string[] = [];
-  if (pair.matchKind === 'name') {
-    badges.push(renderCompareBadge('同名匹配', 'soft'));
-  }
-  if (pair.changedFields.includes('content')) {
-    badges.push(renderCompareBadge('正文不同', 'strong'));
-  } else {
-    badges.push(renderCompareBadge('正文相同', 'soft'));
-  }
-  if (pair.changedFields.includes('name')) {
-    badges.push(renderCompareBadge('标题', 'soft'));
-  }
-  if (pair.changedFields.includes('role')) {
-    badges.push(renderCompareBadge('角色', 'soft'));
-  }
-  if (pair.changedFields.includes('enabled')) {
-    badges.push(renderCompareBadge('开关', 'soft'));
-  }
-  return badges.join('');
 }
 
 function renderCompareContentPane(
@@ -3419,27 +3418,20 @@ function updateDetailRole(role: string): void {
 }
 
 function updateComparePaneContent(kind: SelectableEntryKind, id: string, content: string): void {
-  const draft = kind === 'source' ? getEditableSourceDraft() : state.targetDraft;
-  if (!draft || !id) {
-    return;
-  }
-
-  setPromptContent(draft, id, content);
-  selectEntryById(kind, id);
-  if (kind === 'source') {
-    markSourceDirty();
-  } else {
-    markTargetDirty();
-  }
+  updateComparePaneDraft(kind, id, draft => setPromptContent(draft, id, content));
 }
 
 function updateComparePaneRole(kind: SelectableEntryKind, id: string, role: string): void {
+  updateComparePaneDraft(kind, id, draft => setPromptRole(draft, id, role));
+}
+
+function updateComparePaneDraft(kind: SelectableEntryKind, id: string, updateDraft: (draft: Preset) => void): void {
   const draft = kind === 'source' ? getEditableSourceDraft() : state.targetDraft;
   if (!draft || !id) {
     return;
   }
 
-  setPromptRole(draft, id, role);
+  updateDraft(draft);
   selectEntryById(kind, id);
   if (kind === 'source') {
     markSourceDirty();

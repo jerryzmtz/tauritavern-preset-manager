@@ -17,6 +17,7 @@ const viewports = [
 
 async function importPlaywright() {
   try {
+    // eslint-disable-next-line import-x/no-unresolved -- Optional dependency; fall back to playwright-core below.
     return await import('playwright');
   } catch (error) {
     try {
@@ -152,6 +153,210 @@ fixturePresets[1].preset.prompts.push({
 });
 fixturePresets[1].preset.prompt_order[0].order.push({ identifier: 'deep-shared-match', enabled: true });
 
+function renderPresetManagerFixtureHostScript() {
+  const fixtureJson = JSON.stringify(fixturePresets).replaceAll('</script', '<\\/script');
+  const versionTagsJson = JSON.stringify(['v2.12', 'v2.11', 'v2.00', 'v1.32', 'v1.31', 'v1.30', 'v1.19']);
+
+  return `
+    const presetManagerFixturePresets = ${fixtureJson};
+    const presetManagerVersionTags = ${versionTagsJson};
+    const presetManagerImportContent = "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v2.12/dist/preset-manager/index.js';";
+    const clonePreset = value => JSON.parse(JSON.stringify(value));
+    const makeRuntimePreset = data => {
+      const cloned = clonePreset(data);
+      const order = cloned.prompt_order?.find(item => item.character_id === 100001)?.order
+        ?? cloned.prompt_order?.find(item => Array.isArray(item.order))?.order
+        ?? [];
+      const getPromptId = prompt => prompt.identifier ?? prompt.id;
+      const promptById = new Map(cloned.prompts.map(prompt => [getPromptId(prompt), prompt]));
+      const orderedPrompts = [
+        ...order.map(item => ({ source: promptById.get(item.identifier), order: item })).filter(item => item.source),
+        ...cloned.prompts
+          .filter(prompt => !order.some(item => item.identifier === getPromptId(prompt)))
+          .map(prompt => ({ source: prompt, order: { enabled: prompt.enabled !== false } })),
+      ];
+      const wrapReadonlyFields = value => {
+        const wrapped = {};
+        for (const key of Object.keys(value)) {
+          Object.defineProperty(wrapped, key, {
+            configurable: true,
+            enumerable: false,
+            get: () => value[key],
+          });
+        }
+        return wrapped;
+      };
+      return {
+        settings: {},
+        prompts: orderedPrompts.map(({ source, order: orderEntry }) => wrapReadonlyFields({
+          id: getPromptId(source),
+          name: source.name,
+          enabled: orderEntry.enabled !== false,
+          position: { type: 'relative' },
+          role: source.role,
+          ...(typeof source.content === 'string' ? { content: source.content } : {}),
+          extra: source,
+        })),
+        prompts_unused: [],
+        extensions: {},
+      };
+    };
+    const createPresetManagerScriptTrees = scriptId => ({
+      global: [{
+        type: 'script',
+        enabled: true,
+        name: '预设管理',
+        id: scriptId,
+        content: presetManagerImportContent,
+        info: '',
+        button: { enabled: true, buttons: [] },
+        data: {},
+      }],
+      preset: [],
+      character: [],
+    });
+    const installPresetFixtureStore = host => {
+      host.__clonePreset = clonePreset;
+      host.__makeRuntimePreset = makeRuntimePreset;
+      if (!host.__presetFixtureStore) {
+        host.__presetFixtureStore = new Map(presetManagerFixturePresets.map(item => [item.name, item.preset]));
+      }
+      if (!host.__inUsePreset) {
+        host.__inUsePreset = clonePreset(host.__presetFixtureStore.get('夏瑾二改（自用）'));
+      }
+    };
+    const installPresetManagerTestHost = (host, options = {}) => {
+      const storeHost = options.storeHost ?? host;
+      const buttonDocument = options.buttonDocument ?? host.document;
+      installPresetFixtureStore(storeHost);
+      host.__clonePreset = clonePreset;
+      host.__makeRuntimePreset = makeRuntimePreset;
+      host.__scriptButtons = [];
+      host.__registeredEvents = [];
+      host.__scriptButtonEventsEnabled = true;
+      host.__updateScriptButtonsWithCalls = 0;
+      host.__replaceScriptButtonsCalls = 0;
+      host.__versionScriptTrees = createPresetManagerScriptTrees(options.scriptId);
+      host.__scriptVariables = {};
+      const nativeFetch = host.fetch.bind(host);
+      host.fetch = (input, init) => {
+        const href = String(input);
+        if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/releases/latest') {
+          return Promise.resolve(new host.Response(JSON.stringify({ tag_name: 'v2.12' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json; charset=utf-8' },
+          }));
+        }
+        if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/tags?per_page=20') {
+          return Promise.resolve(new host.Response(JSON.stringify(presetManagerVersionTags.map(name => ({ name }))), {
+            status: 200,
+            headers: { 'content-type': 'application/json; charset=utf-8' },
+          }));
+        }
+        return nativeFetch(input, init);
+      };
+      host.$ = value => {
+        const api = {
+          on(event, callback) {
+            const target = value === host ? host : host.document;
+            target.addEventListener(event, callback);
+            return api;
+          },
+        };
+        if (typeof value === 'function') {
+          if (host.document.readyState === 'loading') {
+            host.document.addEventListener('DOMContentLoaded', value, { once: true });
+          } else {
+            host.queueMicrotask(value);
+          }
+        }
+        return api;
+      };
+      host.getButtonEvent = name => 'helper-button:' + name;
+      host.eventOn = (event, callback) => {
+        host.__registeredEvents.push(event);
+        host.addEventListener(event, callback);
+        return { stop: () => host.removeEventListener(event, callback) };
+      };
+      host.updateScriptButtonsWith = updater => {
+        host.__updateScriptButtonsWithCalls += 1;
+        host.__scriptButtons = updater(host.__scriptButtons.map(button => ({ ...button }))).map(button => ({ ...button }));
+        const buttonHost = buttonDocument.getElementById('script-buttons');
+        if (buttonHost) {
+          buttonHost.innerHTML = '';
+          for (const button of host.__scriptButtons.filter(item => item.visible)) {
+            const element = buttonDocument.createElement('button');
+            element.type = 'button';
+            element.textContent = button.name;
+            element.dataset.buttonName = button.name;
+            element.dataset.scriptButton = button.name;
+            element.setAttribute('aria-label', button.name);
+            element.addEventListener('click', () => {
+              if (!options.respectButtonEventToggle || host.__scriptButtonEventsEnabled) {
+                host.dispatchEvent(new host.Event(host.getButtonEvent(button.name)));
+              }
+            });
+            buttonHost.appendChild(element);
+          }
+        }
+        return host.__scriptButtons;
+      };
+      host.replaceScriptButtons = () => {
+        host.__replaceScriptButtonsCalls += 1;
+        throw new Error('replaceScriptButtons 不应被预设管理器入口使用');
+      };
+      host.getPresetNames = () => Array.from(storeHost.__presetFixtureStore.keys());
+      host.getLoadedPresetName = () => '夏瑾二改（自用）';
+      host.getPreset = name => host.__makeRuntimePreset(name === 'in_use' ? storeHost.__inUsePreset : storeHost.__presetFixtureStore.get(name));
+      host.getScriptId = () => options.scriptId;
+      host.getScriptTrees = ({ type }) => host.__versionScriptTrees[type] ?? [];
+      host.updateScriptTreesWith = (updater, { type }) => {
+        host.__versionScriptTrees[type] = updater(host.__versionScriptTrees[type] ?? []);
+        return host.__versionScriptTrees[type];
+      };
+      host.getVariables = () => host.__scriptVariables;
+      host.updateVariablesWith = updater => {
+        host.__scriptVariables = updater(host.__scriptVariables);
+        return host.__scriptVariables;
+      };
+      host.deleteVariable = variablePath => {
+        delete host.__scriptVariables[variablePath];
+        return { variables: host.__scriptVariables, delete_occurred: true };
+      };
+      host.insertOrAssignVariables = variables => {
+        host.__scriptVariables = { ...(host.__scriptVariables ?? {}), ...variables };
+        return host.__scriptVariables;
+      };
+      host.createOrReplacePreset = async (name, preset, createOptions = {}) => {
+        if (name === 'in_use') {
+          storeHost.__inUsePreset = clonePreset(preset);
+        } else {
+          storeHost.__presetFixtureStore.set(name, clonePreset(preset));
+        }
+        return options.savePreset ? options.savePreset(name, preset, createOptions) : true;
+      };
+      host.deletePreset = async name => storeHost.__presetFixtureStore.delete(name);
+      host.renamePreset = async (name, newName) => {
+        if (!storeHost.__presetFixtureStore.has(name)) {
+          return false;
+        }
+        const preset = storeHost.__presetFixtureStore.get(name);
+        storeHost.__presetFixtureStore.delete(name);
+        storeHost.__presetFixtureStore.set(newName, preset);
+        return true;
+      };
+      host.TavernHelper = {
+        getPresetNames: host.getPresetNames,
+        getLoadedPresetName: host.getLoadedPresetName,
+        getPreset: host.getPreset,
+        createOrReplacePreset: host.createOrReplacePreset,
+        deletePreset: host.deletePreset,
+        renamePreset: host.renamePreset,
+      };
+    };
+  `;
+}
+
 function serveFixture() {
   let savedPreset = null;
   const server = createServer(async (request, response) => {
@@ -195,191 +400,22 @@ function serveFixture() {
   <main>中文测试：预设管理</main>
   <div id="script-buttons"></div>
   <script>
-    window.__clonePreset = value => JSON.parse(JSON.stringify(value));
-    window.__clonePreset = value => JSON.parse(JSON.stringify(value));
-    window.__presetFixtureStore = new Map(${JSON.stringify(fixturePresets)}.map(item => [item.name, item.preset]));
-    window.__inUsePreset = window.__clonePreset(window.__presetFixtureStore.get('夏瑾二改（自用）'));
-    window.__inUsePreset = window.__clonePreset(window.__presetFixtureStore.get('夏瑾二改（自用）'));
-    window.__makeRuntimePreset = data => {
-      const cloned = JSON.parse(JSON.stringify(data));
-      const order = cloned.prompt_order?.find(item => item.character_id === 100001)?.order
-        ?? cloned.prompt_order?.find(item => Array.isArray(item.order))?.order
-        ?? [];
-      const getPromptId = prompt => prompt.identifier ?? prompt.id;
-      const promptById = new Map(cloned.prompts.map(prompt => [getPromptId(prompt), prompt]));
-      const orderedPrompts = [
-        ...order.map(item => ({ source: promptById.get(item.identifier), order: item })).filter(item => item.source),
-        ...cloned.prompts
-          .filter(prompt => !order.some(item => item.identifier === getPromptId(prompt)))
-          .map(prompt => ({ source: prompt, order: { enabled: prompt.enabled !== false } })),
-      ];
-      const wrapReadonlyFields = value => {
-        const wrapped = {};
-        for (const key of Object.keys(value)) {
-          Object.defineProperty(wrapped, key, {
-            configurable: true,
-            enumerable: false,
-            get: () => value[key],
-          });
-        }
-        return wrapped;
-      };
-      return {
-        settings: {},
-        prompts: orderedPrompts.map(({ source, order: orderEntry }) => wrapReadonlyFields({
-          id: getPromptId(source),
-          name: source.name,
-          enabled: orderEntry.enabled !== false,
-          position: { type: 'relative' },
-          role: source.role,
-          ...(typeof source.content === 'string' ? { content: source.content } : {}),
-          extra: source,
-        })),
-        prompts_unused: [],
-        extensions: {},
-      };
-    };
-    window.__scriptButtons = [];
-    window.__registeredEvents = [];
-    window.__scriptButtonEventsEnabled = true;
-    window.__updateScriptButtonsWithCalls = 0;
-    window.__replaceScriptButtonsCalls = 0;
-    window.__versionScriptTrees = {
-      global: [{
-        type: 'script',
-        enabled: true,
-        name: '预设管理',
-        id: 'preset-manager-script-id',
-        content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v2.11/dist/preset-manager/index.js';",
-        info: '',
-        button: { enabled: true, buttons: [] },
-        data: {},
-      }],
-      preset: [],
-      character: [],
-    };
-    window.__scriptVariables = {};
-    const nativeFetch = window.fetch.bind(window);
-    window.fetch = (input, init) => {
-      const href = String(input);
-      if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/releases/latest') {
-        return Promise.resolve(new Response(JSON.stringify({ tag_name: 'v2.11' }), {
-          status: 200,
-          headers: { 'content-type': 'application/json; charset=utf-8' },
-        }));
-      }
-      if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/tags?per_page=20') {
-        return Promise.resolve(new Response(JSON.stringify([{ name: 'v2.11' }, { name: 'v2.00' }, { name: 'v1.32' }, { name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }] ), {
-          status: 200,
-          headers: { 'content-type': 'application/json; charset=utf-8' },
-        }));
-      }
-      return nativeFetch(input, init);
-    };
-    window.$ = value => {
-      const api = {
-        on(event, callback) {
-          const target = value === window ? window : document;
-          target.addEventListener(event, callback);
-          return api;
-        },
-      };
-      if (typeof value === 'function') {
-        if (document.readyState === 'loading') {
-          document.addEventListener('DOMContentLoaded', value, { once: true });
-        } else {
-          queueMicrotask(value);
-        }
-      }
-      return api;
-    };
-    window.getButtonEvent = name => 'helper-button:' + name;
-    window.eventOn = (event, callback) => {
-      window.__registeredEvents.push(event);
-      window.addEventListener(event, callback);
-      return { stop: () => window.removeEventListener(event, callback) };
-    };
-    window.updateScriptButtonsWith = updater => {
-      window.__updateScriptButtonsWithCalls += 1;
-      window.__scriptButtons = updater(window.__scriptButtons.map(button => ({ ...button }))).map(button => ({ ...button }));
-      const host = document.getElementById('script-buttons');
-      host.innerHTML = '';
-      for (const button of window.__scriptButtons.filter(item => item.visible)) {
-        const element = document.createElement('button');
-        element.type = 'button';
-        element.textContent = button.name;
-        element.dataset.buttonName = button.name;
-        element.dataset.scriptButton = button.name;
-        element.setAttribute('aria-label', button.name);
-        element.addEventListener('click', () => {
-          if (window.__scriptButtonEventsEnabled) {
-            window.dispatchEvent(new Event(window.getButtonEvent(button.name)));
-          }
+    ${renderPresetManagerFixtureHostScript()}
+    installPresetManagerTestHost(window, {
+      scriptId: 'preset-manager-script-id',
+      respectButtonEventToggle: true,
+      savePreset: async (name, preset, options = {}) => {
+        const response = await fetch('/api/presets/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ apiId: 'openai', name, preset, options }),
         });
-        host.appendChild(element);
-      }
-      return window.__scriptButtons;
-    };
-    window.replaceScriptButtons = () => {
-      window.__replaceScriptButtonsCalls += 1;
-      throw new Error('replaceScriptButtons 不应被预设管理器入口使用');
-    };
-    window.getPresetNames = () => Array.from(window.__presetFixtureStore.keys());
-    window.getLoadedPresetName = () => '夏瑾二改（自用）';
-    window.getPreset = name => window.__makeRuntimePreset(name === 'in_use' ? window.__inUsePreset : window.__presetFixtureStore.get(name));
-    window.getScriptId = () => 'preset-manager-script-id';
-    window.getScriptTrees = ({ type }) => window.__versionScriptTrees[type] ?? [];
-    window.updateScriptTreesWith = (updater, { type }) => {
-      window.__versionScriptTrees[type] = updater(window.__versionScriptTrees[type] ?? []);
-      return window.__versionScriptTrees[type];
-    };
-    window.getVariables = () => window.__scriptVariables;
-    window.updateVariablesWith = updater => {
-      window.__scriptVariables = updater(window.__scriptVariables);
-      return window.__scriptVariables;
-    };
-    window.deleteVariable = variablePath => {
-      delete window.__scriptVariables[variablePath];
-      return { variables: window.__scriptVariables, delete_occurred: true };
-    };
-    window.insertOrAssignVariables = variables => {
-      window.__scriptVariables = { ...window.__scriptVariables, ...variables };
-      return window.__scriptVariables;
-    };
-    window.createOrReplacePreset = async (name, preset, options = {}) => {
-      if (name === 'in_use') {
-        window.__inUsePreset = window.__clonePreset(preset);
-      } else {
-        window.__presetFixtureStore.set(name, window.__clonePreset(preset));
-      }
-      const response = await fetch('/api/presets/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiId: 'openai', name, preset, options }),
-      });
-      if (!response.ok) {
-        throw new Error('保存预设失败：HTTP ' + response.status);
-      }
-      return true;
-    };
-    window.deletePreset = async name => window.__presetFixtureStore.delete(name);
-    window.renamePreset = async (name, newName) => {
-      if (!window.__presetFixtureStore.has(name)) {
-        return false;
-      }
-      const preset = window.__presetFixtureStore.get(name);
-      window.__presetFixtureStore.delete(name);
-      window.__presetFixtureStore.set(newName, preset);
-      return true;
-    };
-    window.TavernHelper = {
-      getPresetNames: window.getPresetNames,
-      getLoadedPresetName: window.getLoadedPresetName,
-      getPreset: window.getPreset,
-      createOrReplacePreset: window.createOrReplacePreset,
-      deletePreset: window.deletePreset,
-      renamePreset: window.renamePreset,
-    };
+        if (!response.ok) {
+          throw new Error('保存预设失败：HTTP ' + response.status);
+        }
+        return true;
+      },
+    });
   </script>
   <script type="module" src="/dist/preset-manager/index.js"></script>
 </body>
@@ -419,177 +455,16 @@ function serveFixture() {
   <div id="script-buttons"></div>
   <iframe id="script-frame" title="zero-sized-script-frame" src="/zero-frame-child" style="width:0;height:0;border:0;display:block"></iframe>
   <script>
-    window.__presetFixtureStore = new Map(${JSON.stringify(fixturePresets)}.map(item => [item.name, item.preset]));
-    const makeRuntimePreset = data => {
-      const cloned = JSON.parse(JSON.stringify(data));
-      const order = cloned.prompt_order?.find(item => item.character_id === 100001)?.order
-        ?? cloned.prompt_order?.find(item => Array.isArray(item.order))?.order
-        ?? [];
-      const getPromptId = prompt => prompt.identifier ?? prompt.id;
-      const promptById = new Map(cloned.prompts.map(prompt => [getPromptId(prompt), prompt]));
-      const orderedPrompts = [
-        ...order.map(item => ({ source: promptById.get(item.identifier), order: item })).filter(item => item.source),
-        ...cloned.prompts
-          .filter(prompt => !order.some(item => item.identifier === getPromptId(prompt)))
-          .map(prompt => ({ source: prompt, order: { enabled: prompt.enabled !== false } })),
-      ];
-      const wrapReadonlyFields = value => {
-        const wrapped = {};
-        for (const key of Object.keys(value)) {
-          Object.defineProperty(wrapped, key, {
-            configurable: true,
-            enumerable: false,
-            get: () => value[key],
-          });
-        }
-        return wrapped;
-      };
-      return {
-        settings: {},
-        prompts: orderedPrompts.map(({ source, order: orderEntry }) => wrapReadonlyFields({
-          id: getPromptId(source),
-          name: source.name,
-          enabled: orderEntry.enabled !== false,
-          position: { type: 'relative' },
-          role: source.role,
-          ...(typeof source.content === 'string' ? { content: source.content } : {}),
-          extra: source,
-        })),
-        prompts_unused: [],
-        extensions: {},
-      };
-    };
+    ${renderPresetManagerFixtureHostScript()}
+    installPresetFixtureStore(window);
     const frame = document.getElementById('script-frame');
     frame.addEventListener('load', () => {
       const child = frame.contentWindow;
-      child.__scriptButtons = [];
-      child.__registeredEvents = [];
-      child.__updateScriptButtonsWithCalls = 0;
-      child.__replaceScriptButtonsCalls = 0;
-      child.__versionScriptTrees = {
-        global: [{
-          type: 'script',
-          enabled: true,
-          name: '预设管理',
-          id: 'zero-frame-script-id',
-          content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v2.11/dist/preset-manager/index.js';",
-          info: '',
-          button: { enabled: true, buttons: [] },
-          data: {},
-        }],
-        preset: [],
-        character: [],
-      };
-      child.__scriptVariables = {};
-      const childNativeFetch = child.fetch.bind(child);
-      child.fetch = (input, init) => {
-        const href = String(input);
-        if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/releases/latest') {
-          return Promise.resolve(new child.Response(JSON.stringify({ tag_name: 'v2.11' }), {
-            status: 200,
-            headers: { 'content-type': 'application/json; charset=utf-8' },
-          }));
-        }
-        if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/tags?per_page=20') {
-          return Promise.resolve(new child.Response(JSON.stringify([{ name: 'v2.11' }, { name: 'v2.00' }, { name: 'v1.32' }, { name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }] ), {
-            status: 200,
-            headers: { 'content-type': 'application/json; charset=utf-8' },
-          }));
-        }
-        return childNativeFetch(input, init);
-      };
-      child.$ = value => {
-        const api = {
-          on(event, callback) {
-            const target = value === child ? child : child.document;
-            target.addEventListener(event, callback);
-            return api;
-          },
-        };
-        if (typeof value === 'function') {
-          if (child.document.readyState === 'loading') {
-            child.document.addEventListener('DOMContentLoaded', value, { once: true });
-          } else {
-            child.queueMicrotask(value);
-          }
-        }
-        return api;
-      };
-      child.getButtonEvent = name => 'helper-button:' + name;
-      child.eventOn = (event, callback) => {
-        child.__registeredEvents.push(event);
-        child.addEventListener(event, callback);
-        return { stop: () => child.removeEventListener(event, callback) };
-      };
-      child.updateScriptButtonsWith = updater => {
-        child.__updateScriptButtonsWithCalls += 1;
-        child.__scriptButtons = updater(child.__scriptButtons.map(button => ({ ...button }))).map(button => ({ ...button }));
-        const host = document.getElementById('script-buttons');
-        host.innerHTML = '';
-        for (const button of child.__scriptButtons.filter(item => item.visible)) {
-          const element = document.createElement('button');
-          element.type = 'button';
-          element.textContent = button.name;
-          element.dataset.buttonName = button.name;
-          element.dataset.scriptButton = button.name;
-          element.setAttribute('aria-label', button.name);
-          element.addEventListener('click', () => child.dispatchEvent(new child.Event(child.getButtonEvent(button.name))));
-          host.appendChild(element);
-        }
-        return child.__scriptButtons;
-      };
-      child.replaceScriptButtons = () => {
-        child.__replaceScriptButtonsCalls += 1;
-        throw new Error('replaceScriptButtons 不应被预设管理器入口使用');
-      };
-      child.getScriptId = () => 'zero-frame-script-id';
-      child.getScriptTrees = ({ type }) => child.__versionScriptTrees[type] ?? [];
-      child.updateScriptTreesWith = (updater, { type }) => {
-        child.__versionScriptTrees[type] = updater(child.__versionScriptTrees[type] ?? []);
-        return child.__versionScriptTrees[type];
-      };
-      child.getVariables = () => child.__scriptVariables;
-      child.updateVariablesWith = updater => {
-        child.__scriptVariables = updater(child.__scriptVariables);
-        return child.__scriptVariables;
-      };
-      child.deleteVariable = variablePath => {
-        delete child.__scriptVariables[variablePath];
-        return { variables: child.__scriptVariables, delete_occurred: true };
-      };
-      child.insertOrAssignVariables = variables => {
-        child.__scriptVariables = { ...(child.__scriptVariables ?? {}), ...variables };
-        return child.__scriptVariables;
-      };
-      child.getPresetNames = () => Array.from(window.__presetFixtureStore.keys());
-      child.getLoadedPresetName = () => '夏瑾二改（自用）';
-      child.getPreset = name => makeRuntimePreset(name === 'in_use' ? window.__inUsePreset : window.__presetFixtureStore.get(name));
-      child.createOrReplacePreset = async (name, preset) => {
-        if (name === 'in_use') {
-          window.__inUsePreset = window.__clonePreset(preset);
-        } else {
-          window.__presetFixtureStore.set(name, window.__clonePreset(preset));
-        }
-        return true;
-      };
-      child.deletePreset = async name => window.__presetFixtureStore.delete(name);
-      child.renamePreset = async (name, newName) => {
-        if (!window.__presetFixtureStore.has(name)) {
-          return false;
-        }
-        const preset = window.__presetFixtureStore.get(name);
-        window.__presetFixtureStore.delete(name);
-        window.__presetFixtureStore.set(newName, preset);
-        return true;
-      };
-      child.TavernHelper = {
-        getPresetNames: child.getPresetNames,
-        getLoadedPresetName: child.getLoadedPresetName,
-        getPreset: child.getPreset,
-        createOrReplacePreset: child.createOrReplacePreset,
-        deletePreset: child.deletePreset,
-        renamePreset: child.renamePreset,
-      };
+      installPresetManagerTestHost(child, {
+        scriptId: 'zero-frame-script-id',
+        storeHost: window,
+        buttonDocument: document,
+      });
       const script = child.document.createElement('script');
       script.type = 'module';
       script.src = '/dist/preset-manager/index.js';
@@ -1603,7 +1478,7 @@ try {
       throw new Error(`${viewport.name}: 顶部刷新按钮应该已删除`);
     }
     const versionText = await page.locator('.pm-version-chip').textContent();
-    if (versionText?.trim() !== 'v2.11') {
+    if (versionText?.trim() !== 'v2.12') {
       throw new Error(`${viewport.name}: 标题旁没有显示当前版本号`);
     }
 
@@ -1633,7 +1508,7 @@ try {
       await verifyTutorial(page, fixture, viewport.name);
       await page.locator('.pm-version-button').click();
       await page.locator('.pm-version-box').waitFor({ state: 'visible' });
-      await page.waitForFunction(() => document.body.innerText.includes('v2.11'));
+      await page.waitForFunction(() => document.body.innerText.includes('v2.12'));
       if (await page.locator('.pm-version-row[data-version="v0.99"]').count()) {
         throw new Error(`${viewport.name}: 版本列表不应显示 v1.0.0 以前的版本`);
       }
