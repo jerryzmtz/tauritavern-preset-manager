@@ -1,6 +1,6 @@
 ---
-name: TauriTavern Preset Stitcher
-description: A native-feeling TauriTavern workbench for moving PromptManager entries safely between presets.
+name: TauriTavern Preset Manager
+description: A native-feeling TauriTavern workbench for managing, comparing, and moving PromptManager entries safely between presets.
 colors:
   theme-text: "#e7e1d0"
   theme-surface: "#102021"
@@ -48,7 +48,7 @@ components:
     padding: "7px 8px"
 ---
 
-# Design System: TauriTavern Preset Stitcher
+# Design System: TauriTavern Preset Manager
 
 ## 1. Overview
 

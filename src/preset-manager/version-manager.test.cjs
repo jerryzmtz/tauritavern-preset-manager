@@ -83,7 +83,7 @@ test('inspects the current script import source across nested script trees', () 
 
   assert.equal(source.status, 'versioned');
   assert.equal(source.scope, 'global');
-  assert.equal(source.scriptName, '预设缝合管理器');
+  assert.equal(source.scriptName, '预设管理');
   assert.equal(source.specifier, 'v1.19');
   assert.equal(source.importTemplate, importTemplate('cdn.jsdelivr.net'));
 });
@@ -174,7 +174,9 @@ test('recognizes raw GitHub imports and validates custom mirror templates', asyn
   assert.equal(validateVersionImportTemplate(mirrorTemplate).ok, true);
   assert.equal(validateVersionImportTemplate('https://example.com/no-version.js').ok, false);
   assert.equal(
-    validateVersionImportTemplate("https://mirror.example.com/gh/jerryzmtz/tauritavern-preset-manager@{version}/dist/preset-manager/index.js'").ok,
+    validateVersionImportTemplate(
+      "https://mirror.example.com/gh/jerryzmtz/tauritavern-preset-manager@{version}/dist/preset-manager/index.js'",
+    ).ok,
     false,
   );
 });
@@ -203,7 +205,7 @@ function script(overrides) {
   return {
     type: 'script',
     enabled: overrides.enabled ?? true,
-    name: '预设缝合管理器',
+    name: '预设管理',
     id: overrides.id,
     content: overrides.content,
     info: '',

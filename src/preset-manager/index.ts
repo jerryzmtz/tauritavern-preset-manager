@@ -18,6 +18,7 @@ import {
   ScriptVersionSource,
 } from './version-manager';
 import {
+  comparePromptEntries,
   createFavoriteFromEntry,
   deepClone,
   FavoriteEntry,
@@ -27,6 +28,8 @@ import {
   movePrompt,
   movePromptsToIndex,
   Preset,
+  PromptComparePair,
+  PromptCompareResult,
   PromptEntry,
   removePrompt,
   setPromptContent,
@@ -35,7 +38,9 @@ import {
   validatePreset,
 } from './core';
 
-const HELPER_BUTTON_NAME = '预设缝合';
+const APP_NAME = '预设管理';
+const HELPER_BUTTON_NAME = APP_NAME;
+const LEGACY_HELPER_BUTTON_NAMES = ['预设缝合'];
 const STORAGE_NAMESPACE = 'preset-manager';
 const FAVORITES_TABLE = 'favorites';
 const FAVORITES_KEY = 'v1';
@@ -58,6 +63,7 @@ type EntryKind = 'source' | 'target' | 'favorite';
 type SelectableEntryKind = 'source' | 'target';
 type PresetPaneKind = 'source' | 'target';
 type FilterValue = 'all' | 'enabled' | 'disabled' | 'system' | 'user' | 'assistant';
+type CompareFilterValue = 'all' | 'same' | 'content' | 'source_only' | 'target_only' | 'metadata';
 type DetailRole = 'system' | 'user' | 'assistant';
 type VersionImportSourceSelection = VersionImportSourceId | typeof CUSTOM_VERSION_IMPORT_SOURCE_ID;
 type VersionMessageTone = '' | 'success' | 'warning';
@@ -126,6 +132,8 @@ interface AppState {
   sourceFilter: FilterValue;
   targetFilter: FilterValue;
   activeTab: MobileTab;
+  compareMode: boolean;
+  compareFilter: CompareFilterValue;
   dirty: boolean;
   sourceDirty: boolean;
   targetDirty: boolean;
@@ -170,6 +178,8 @@ const state: AppState = {
   sourceFilter: 'all',
   targetFilter: 'all',
   activeTab: 'source',
+  compareMode: false,
+  compareFilter: 'all',
   dirty: false,
   sourceDirty: false,
   targetDirty: false,
@@ -255,7 +265,7 @@ function registerManagerEntry(): void {
     buttonEventHandle?.stop();
     buttonEventHandle = eventOn(getButtonEvent(HELPER_BUTTON_NAME), () => {
       diagnose('button-event-received');
-      console.info('[预设缝合管理器] 收到脚本按钮事件');
+      console.info(`[${APP_NAME}] 收到脚本按钮事件`);
       window.dispatchEvent(new CustomEvent(OPEN_MANAGER_EVENT));
     });
     window.removeEventListener(OPEN_MANAGER_EVENT, requestOpenManager);
@@ -273,8 +283,8 @@ function registerManagerEntry(): void {
       window.setTimeout(registerManagerEntry, BUTTON_REGISTRATION_RETRY_DELAY_MS);
       return;
     }
-    console.error('预设缝合按钮注册失败', error);
-    showToast('error', error instanceof Error ? error.message : '预设缝合按钮注册失败');
+    console.error(`${APP_NAME}按钮注册失败`, error);
+    showToast('error', error instanceof Error ? error.message : `${APP_NAME}按钮注册失败`);
   }
 }
 
@@ -316,7 +326,7 @@ function syncManagerButton(): void {
     const nextButtons: ScriptButton[] = [];
 
     for (const button of buttons) {
-      if (button.name === HELPER_BUTTON_NAME) {
+      if (isManagedHelperButtonName(button.name)) {
         if (!insertedButton) {
           nextButtons.push(scriptButton(HELPER_BUTTON_NAME, button, true));
           insertedButton = true;
@@ -345,9 +355,9 @@ function requestOpenManager(): void {
   lastOpenRequestAt = now;
   diagnose('open-requested');
   void openManager().catch(error => {
-    const message = error instanceof Error ? error.message : '预设缝合管理器打开失败';
+    const message = error instanceof Error ? error.message : `${APP_NAME}打开失败`;
     diagnose('open-error', { message });
-    console.error('预设缝合管理器打开失败', error);
+    console.error(`${APP_NAME}打开失败`, error);
     showToast('error', message);
   });
 }
@@ -381,7 +391,7 @@ function onPotentialHelperButtonClick(event: MouseEvent): void {
 }
 
 function isHelperButtonElement(button: HTMLElement): boolean {
-  if (button.dataset.buttonName === HELPER_BUTTON_NAME || button.dataset.scriptButton === HELPER_BUTTON_NAME) {
+  if (isManagedHelperButtonName(button.dataset.buttonName) || isManagedHelperButtonName(button.dataset.scriptButton)) {
     return true;
   }
 
@@ -389,11 +399,15 @@ function isHelperButtonElement(button: HTMLElement): boolean {
   const title = button.getAttribute('title')?.trim();
   const text = button.textContent?.trim();
   return (
-    ariaLabel === HELPER_BUTTON_NAME ||
-    title === HELPER_BUTTON_NAME ||
-    title === `打开${HELPER_BUTTON_NAME}管理器` ||
-    text === HELPER_BUTTON_NAME
+    isManagedHelperButtonName(ariaLabel) ||
+    isManagedHelperButtonName(title) ||
+    title === `打开${HELPER_BUTTON_NAME}` ||
+    isManagedHelperButtonName(text)
   );
+}
+
+function isManagedHelperButtonName(name: string | undefined): boolean {
+  return name === HELPER_BUTTON_NAME || LEGACY_HELPER_BUTTON_NAMES.includes(name ?? '');
 }
 
 function helperGetPresetNames(): string[] {
@@ -496,6 +510,8 @@ async function openManager(): Promise<void> {
   state.targetOriginal = null;
   state.sourceDirty = false;
   state.targetDirty = false;
+  state.compareMode = false;
+  state.compareFilter = 'all';
   syncDirtyState();
   hydratePresetList({ targetFromLoaded: true });
   state.isOpen = true;
@@ -893,19 +909,22 @@ function applyMobileSurfaces(root: HTMLElement): void {
 }
 
 function renderDialog(): string {
+  const sourceCompareEntries = getSourceCompareEntries();
+  const targetCompareEntries = getTargetCompareEntries();
   const sourceEntries = getSourceEntries();
   const targetEntries = getTargetEntries();
+  const comparison = state.compareMode ? comparePromptEntries(sourceCompareEntries, targetCompareEntries) : null;
   pruneEntrySelections();
   const selected = getDetailSelection();
   const validation = state.targetDraft ? validatePreset(state.targetDraft) : null;
 
   return `
     <div class="pm-backdrop" data-action="backdrop-close"></div>
-    <section class="pm-panel" role="dialog" aria-modal="true" aria-label="预设缝合管理器" data-active-tab="${state.activeTab}">
+    <section class="pm-panel" role="dialog" aria-modal="true" aria-label="${APP_NAME}" data-active-tab="${state.activeTab}" data-compare-mode="${state.compareMode ? 'true' : 'false'}">
       <header class="pm-header">
         <div class="pm-title-block">
           <div class="pm-title-line">
-            <div class="pm-title">预设缝合管理器</div>
+            <div class="pm-title">${APP_NAME}</div>
             <span class="pm-version-chip">${APP_VERSION}</span>
             <button class="pm-version-button ${getVersionButtonClass()}" type="button" data-action="open-version-manager" title="${escapeAttr(getVersionButtonTitle())}" aria-label="${escapeAttr(getVersionButtonTitle())}">
               <i class="fa-solid ${getVersionButtonIcon()}" aria-hidden="true"></i>
@@ -920,6 +939,8 @@ function renderDialog(): string {
         </div>
       </header>
 
+      ${renderCompareBar(comparison)}
+
       <nav class="pm-mobile-tabs" aria-label="移动端视图">
         ${renderTab('source', '来源')}
         ${renderTab('target', '目标')}
@@ -927,19 +948,20 @@ function renderDialog(): string {
       </nav>
 
       <main class="pm-body">
-        ${renderPresetPane('source', '来源预设', state.sourceName, state.sourceQuery, state.sourceFilter, sourceEntries)}
-        ${renderPresetPane('target', '目标预设', state.targetName, state.targetQuery, state.targetFilter, targetEntries)}
-        ${renderDetail(selected)}
+        ${renderPresetPane('source', '来源预设', state.sourceName, state.sourceQuery, state.sourceFilter, sourceEntries, comparison)}
+        ${renderPresetPane('target', '目标预设', state.targetName, state.targetQuery, state.targetFilter, targetEntries, comparison)}
+        ${renderDetail(selected, comparison)}
       </main>
 
       <footer class="pm-footer">
         <div class="pm-footer-status">
           ${state.dirty ? '<span class="pm-dot pm-dot-dirty"></span>有未保存的修改' : '<span class="pm-dot"></span>暂无未保存修改'}
+          ${state.compareMode ? '<span class="pm-validation">比对模式只读</span>' : ''}
           ${validation && !validation.ok ? `<span class="pm-validation">结构警告 ${validation.duplicateIdentifiers.length + validation.missingOrderReferences.length + validation.promptsWithoutIdentifiers}</span>` : ''}
         </div>
         <div class="pm-footer-actions">
-          <button class="pm-button" type="button" data-action="reset-draft" ${state.dirty ? '' : 'disabled'}>放弃修改</button>
-          <button class="pm-button pm-button-primary" type="button" data-action="save" ${state.dirty && !state.saving ? '' : 'disabled'}>
+          <button class="pm-button" type="button" data-action="reset-draft" ${state.dirty && !state.compareMode ? '' : 'disabled'}>放弃修改</button>
+          <button class="pm-button pm-button-primary" type="button" data-action="save" ${state.dirty && !state.saving && !state.compareMode ? '' : 'disabled'}>
             <i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>
             ${state.saving ? '保存中' : '保存预设'}
           </button>
@@ -1106,6 +1128,49 @@ function renderVersionRow(version: string): string {
   `;
 }
 
+function renderCompareBar(comparison: PromptCompareResult | null): string {
+  const pressed = state.compareMode ? 'true' : 'false';
+  const summary = comparison?.summary;
+  return `
+    <div class="pm-compare-bar">
+      <button class="pm-selection-mode-button pm-compare-toggle" type="button" data-action="toggle-compare" aria-pressed="${pressed}" title="开启后只高亮来源和目标预设的条目正文差异">
+        <i class="fa-solid fa-code-compare" aria-hidden="true"></i>
+        <span>比对模式</span>
+      </button>
+      ${
+        summary
+          ? `
+        <div class="pm-compare-summary" aria-label="比对摘要">
+          ${renderCompareFilterButton('same', '相同', summary.same, false)}
+          ${renderCompareFilterButton('content', '正文不同', summary.contentChanged, true)}
+          ${renderCompareFilterButton('source_only', '仅来源', summary.sourceOnly, true)}
+          ${renderCompareFilterButton('target_only', '仅目标', summary.targetOnly, true)}
+          ${renderCompareFilterButton('metadata', '辅助差异', summary.metadataChanged, false)}
+        </div>
+      `
+          : '<div class="pm-compare-summary is-muted">开启后高亮两个预设的正文差异</div>'
+      }
+    </div>
+  `;
+}
+
+function renderCompareFilterButton(
+  filter: CompareFilterValue,
+  label: string,
+  count: number,
+  important: boolean,
+): string {
+  const active = state.compareFilter === filter;
+  const classes = ['pm-compare-filter', important && count ? 'is-different' : '', active ? 'is-active' : '']
+    .filter(Boolean)
+    .join(' ');
+  return `
+    <button class="${classes}" type="button" data-action="set-compare-filter" data-compare-filter="${filter}" aria-pressed="${active ? 'true' : 'false'}">
+      ${escapeHtml(label)} ${count}
+    </button>
+  `;
+}
+
 function renderTab(tab: MobileTab, label: string): string {
   const selected = state.activeTab === tab ? 'aria-selected="true"' : 'aria-selected="false"';
   return `<button class="pm-tab" type="button" data-action="tab" data-tab="${tab}" ${selected}>${label}</button>`;
@@ -1118,8 +1183,10 @@ function renderPresetPane(
   query: string,
   filter: FilterValue,
   entries: PromptEntry[],
+  comparison: PromptCompareResult | null,
 ): string {
   const isSource = kind === 'source';
+  const visibleEntries = filterEntriesByCompare(entries, comparison, kind);
   const selectName = isSource ? 'sourceName' : 'targetName';
   const queryName = isSource ? 'sourceQuery' : 'targetQuery';
   const filterName = isSource ? 'sourceFilter' : 'targetFilter';
@@ -1130,7 +1197,7 @@ function renderPresetPane(
       <div class="pm-pane-head">
         <div class="pm-pane-title">
           <h2>${title}</h2>
-          <span class="pm-count">${entries.length}</span>
+          <span class="pm-count">${visibleEntries.length}</span>
         </div>
         ${renderPresetActions(kind, selectedPreset)}
       </div>
@@ -1152,9 +1219,17 @@ function renderPresetPane(
           </select>
         </label>
       </div>
-      ${renderEntrySelectionToolbar(kind, selectedPreset, entries)}
+      ${renderEntrySelectionToolbar(kind, selectedPreset, visibleEntries)}
       <div class="pm-list" data-drop-zone="${kind}">
-        ${entries.length ? entries.map((entry, index) => renderEntryRow(kind, entry, index)).join('') : renderEmpty(kind)}
+        ${
+          visibleEntries.length
+            ? visibleEntries
+                .map((entry, index) =>
+                  renderEntryRow(kind, entry, index, getComparePairForEntry(comparison, kind, entry.id)),
+                )
+                .join('')
+            : renderEmpty(kind)
+        }
       </div>
     </section>
   `;
@@ -1167,7 +1242,7 @@ function renderEntrySelectionToolbar(
 ): string {
   const enabled = isMultiSelectEnabled(kind);
   const selectedCount = getSelectedEntryIds(kind).filter(id => entries.some(entry => entry.id === id)).length;
-  const hasRows = entries.length > 0;
+  const hasRows = entries.length > 0 && !state.compareMode;
   const favoriteDisabled = selectedCount === 0 || isFavoritesPreset(selectedPreset) ? 'disabled' : '';
   const deleteDisabled = selectedCount === 0 ? 'disabled' : '';
   const activeClass = enabled ? 'is-active' : '';
@@ -1249,19 +1324,26 @@ function renderFilterOptions(active: FilterValue): string {
     .join('');
 }
 
-function renderEntryRow(kind: 'source' | 'target', entry: PromptEntry, index: number): string {
+function renderEntryRow(
+  kind: 'source' | 'target',
+  entry: PromptEntry,
+  index: number,
+  comparePair: PromptComparePair | null,
+): string {
   const selectedId = kind === 'source' ? state.selectedSourceId : state.selectedTargetId;
   const selected = selectedId === entry.id ? 'is-selected' : '';
   const multiSelectEnabled = isMultiSelectEnabled(kind);
   const multiSelected = isEntrySelected(kind, entry.id);
   const multiClass = multiSelectEnabled ? 'has-multi-select' : '';
   const multiSelectedClass = multiSelected ? 'is-multi-selected' : '';
+  const compareClass = state.compareMode ? getCompareRowClass(comparePair) : '';
   const enabled = entry.enabled ? '启用' : '禁用';
   const contentLength = entry.content.length;
   const actions = renderRowActions(kind, entry);
+  const draggable = state.compareMode ? 'false' : 'true';
 
   return `
-    <div class="pm-row ${selected} ${multiClass} ${multiSelectedClass}" role="button" tabindex="0" data-entry-kind="${kind}" data-id="${escapeAttr(entry.id)}" data-index="${index}" draggable="true">
+    <div class="pm-row ${selected} ${multiClass} ${multiSelectedClass} ${compareClass}" role="button" tabindex="0" data-entry-kind="${kind}" data-id="${escapeAttr(entry.id)}" data-index="${index}" draggable="${draggable}">
       <div class="pm-row-grip" data-drag-handle="true" aria-hidden="true" title="拖拽条目"><i class="fa-solid fa-grip-lines"></i></div>
       ${multiSelectEnabled ? renderEntrySelectionButton(kind, entry, multiSelected) : ''}
       <div class="pm-row-main">
@@ -1270,6 +1352,7 @@ function renderEntryRow(kind: 'source' | 'target', entry: PromptEntry, index: nu
           <span>${escapeHtml(entry.role)}</span>
           <span>${enabled}</span>
           <span>${contentLength} 字</span>
+          ${renderCompareBadges(comparePair, kind)}
         </div>
       </div>
       ${renderRowToggle(kind, entry)}
@@ -1278,13 +1361,104 @@ function renderEntryRow(kind: 'source' | 'target', entry: PromptEntry, index: nu
   `;
 }
 
+function getComparePairForEntry(
+  comparison: PromptCompareResult | null,
+  kind: 'source' | 'target',
+  id: string,
+): PromptComparePair | null {
+  if (!comparison) {
+    return null;
+  }
+  return (kind === 'source' ? comparison.sourceById.get(id) : comparison.targetById.get(id)) ?? null;
+}
+
+function getCompareRowClass(pair: PromptComparePair | null): string {
+  if (!pair) {
+    return '';
+  }
+  if (pair.status === 'source_only' || pair.status === 'target_only') {
+    return 'is-compare-only';
+  }
+  return pair.changedFields.includes('content') ? 'is-compare-content-different' : '';
+}
+
+function renderCompareBadges(pair: PromptComparePair | null, kind: 'source' | 'target'): string {
+  if (!state.compareMode || !pair) {
+    return '';
+  }
+
+  const badges: string[] = [];
+  if (pair.status === 'source_only') {
+    badges.push(renderCompareBadge(kind === 'source' ? '仅来源' : '未匹配', 'strong'));
+  } else if (pair.status === 'target_only') {
+    badges.push(renderCompareBadge(kind === 'target' ? '仅目标' : '未匹配', 'strong'));
+  } else {
+    if (pair.matchKind === 'name') {
+      badges.push(renderCompareBadge('同名匹配', 'soft'));
+    }
+    if (pair.changedFields.includes('content')) {
+      badges.push(renderCompareBadge('正文不同', 'strong'));
+    }
+    if (pair.changedFields.includes('name')) {
+      badges.push(renderCompareBadge('标题', 'soft'));
+    }
+    if (pair.changedFields.includes('role')) {
+      badges.push(renderCompareBadge('角色', 'soft'));
+    }
+    if (pair.changedFields.includes('enabled')) {
+      badges.push(renderCompareBadge('开关', 'soft'));
+    }
+  }
+
+  return badges.join('');
+}
+
+function renderCompareBadge(label: string, tone: 'strong' | 'soft'): string {
+  return `<span class="pm-compare-badge ${tone}">${escapeHtml(label)}</span>`;
+}
+
+function filterEntriesByCompare(
+  entries: PromptEntry[],
+  comparison: PromptCompareResult | null,
+  kind: 'source' | 'target',
+): PromptEntry[] {
+  if (!state.compareMode || state.compareFilter === 'all') {
+    return entries;
+  }
+  return entries.filter(entry => passesCompareFilter(getComparePairForEntry(comparison, kind, entry.id), kind));
+}
+
+function passesCompareFilter(pair: PromptComparePair | null, kind: 'source' | 'target'): boolean {
+  if (!pair) {
+    return false;
+  }
+  if (state.compareFilter === 'same') {
+    return pair.status === 'matched' && pair.changedFields.length === 0;
+  }
+  if (state.compareFilter === 'content') {
+    return pair.status === 'matched' && pair.changedFields.includes('content');
+  }
+  if (state.compareFilter === 'source_only') {
+    return kind === 'source' && pair.status === 'source_only';
+  }
+  if (state.compareFilter === 'target_only') {
+    return kind === 'target' && pair.status === 'target_only';
+  }
+  if (state.compareFilter === 'metadata') {
+    return pair.status === 'matched' && pair.changedFields.length > 0 && !pair.changedFields.includes('content');
+  }
+  return true;
+}
+
 function renderRowToggle(kind: 'source' | 'target', entry: PromptEntry): string {
   const nextState = entry.enabled ? '禁用' : '启用';
-  const title = `当前${entry.enabled ? '启用' : '禁用'}，点击暂存为${nextState}，底部保存后生效`;
+  const title = state.compareMode
+    ? `当前${entry.enabled ? '启用' : '禁用'}，比对模式下不可修改`
+    : `当前${entry.enabled ? '启用' : '禁用'}，点击暂存为${nextState}，底部保存后生效`;
   const icon = entry.enabled ? 'fa-toggle-on' : 'fa-toggle-off';
 
   return `
-    <button class="pm-row-toggle" type="button" data-action="entry-toggle-enabled" data-entry-kind="${kind}" data-id="${escapeAttr(entry.id)}" aria-pressed="${entry.enabled ? 'true' : 'false'}" title="${title}" aria-label="${title}">
+    <button class="pm-row-toggle" type="button" data-action="entry-toggle-enabled" data-entry-kind="${kind}" data-id="${escapeAttr(entry.id)}" aria-pressed="${entry.enabled ? 'true' : 'false'}" title="${title}" aria-label="${title}" ${state.compareMode ? 'disabled' : ''}>
       <i class="fa-solid ${icon}" aria-hidden="true"></i>
     </button>
   `;
@@ -1304,10 +1478,10 @@ function renderRowActions(kind: 'source' | 'target', entry: PromptEntry): string
   const isFavoritesRow = kind === 'source' ? isFavoritesPreset(state.sourceName) : isFavoritesPreset(state.targetName);
   const favoriteAction = kind === 'source' ? 'favorite-source' : 'favorite-target';
   const deleteAction = kind === 'target' ? 'target-remove' : 'source-remove';
-  const favoriteDisabled = isFavoritesRow ? 'disabled' : '';
-  const deleteDisabled = '';
-  const favoriteTitle = isFavoritesRow ? '已在收藏夹' : '收藏条目';
-  const deleteTitle = '删除条目';
+  const favoriteDisabled = isFavoritesRow || state.compareMode ? 'disabled' : '';
+  const deleteDisabled = state.compareMode ? 'disabled' : '';
+  const favoriteTitle = state.compareMode ? '比对模式下不可收藏' : isFavoritesRow ? '已在收藏夹' : '收藏条目';
+  const deleteTitle = state.compareMode ? '比对模式下不可删除' : '删除条目';
   const favoriteIcon = isFavoritesRow ? 'fa-solid' : 'fa-regular';
 
   return `
@@ -1320,8 +1494,12 @@ function renderRowActions(kind: 'source' | 'target', entry: PromptEntry): string
   `;
 }
 
-function renderDetail(selection: DetailSelection | null): string {
+function renderDetail(selection: DetailSelection | null, comparison: PromptCompareResult | null): string {
   const entry = selection?.entry;
+  const comparePair = selection ? getComparePairForEntry(comparison, selection.kind, selection.entry.id) : null;
+  if (state.compareMode) {
+    return renderCompareDetail(selection, comparePair);
+  }
   const editable =
     selection?.kind === 'source'
       ? Boolean(getEditableSourceDraft())
@@ -1347,6 +1525,88 @@ function renderDetail(selection: DetailSelection | null): string {
       </div>
       <textarea name="detailContent" data-entry-id="${escapeAttr(entry?.id ?? '')}" data-entry-kind="${selection?.kind ?? ''}" ${editable ? '' : 'readonly'} spellcheck="false">${escapeHtml(content)}</textarea>
     </section>
+  `;
+}
+
+function renderCompareDetail(selection: DetailSelection | null, pair: PromptComparePair | null): string {
+  const sourceEntry = pair?.sourceEntry ?? (selection?.kind === 'source' ? selection.entry : undefined);
+  const targetEntry = pair?.targetEntry ?? (selection?.kind === 'target' ? selection.entry : undefined);
+  const title = sourceEntry?.name ?? targetEntry?.name ?? '未选择条目';
+  const sourceLength = sourceEntry?.content.length ?? 0;
+  const targetLength = targetEntry?.content.length ?? 0;
+
+  return `
+    <section class="pm-detail-pane pm-compare-detail" data-pane="preview">
+      <div class="pm-pane-head">
+        <h2>条目详情</h2>
+        <span class="pm-count">比对</span>
+      </div>
+      <div class="pm-detail-toolbar">
+        <div class="pm-detail-title">${escapeHtml(title)}</div>
+        <div class="pm-compare-detail-status">${renderCompareDetailBadges(pair)}</div>
+      </div>
+      <div class="pm-compare-columns">
+        ${renderCompareContentPane('source', sourceEntry, sourceLength)}
+        ${renderCompareContentPane('target', targetEntry, targetLength)}
+      </div>
+    </section>
+  `;
+}
+
+function renderCompareDetailBadges(pair: PromptComparePair | null): string {
+  if (!pair) {
+    return '<span class="pm-compare-badge soft">未选择</span>';
+  }
+  if (pair.status === 'source_only') {
+    return renderCompareBadge('仅来源', 'strong');
+  }
+  if (pair.status === 'target_only') {
+    return renderCompareBadge('仅目标', 'strong');
+  }
+  const badges: string[] = [];
+  if (pair.matchKind === 'name') {
+    badges.push(renderCompareBadge('同名匹配', 'soft'));
+  }
+  if (pair.changedFields.includes('content')) {
+    badges.push(renderCompareBadge('正文不同', 'strong'));
+  } else {
+    badges.push(renderCompareBadge('正文相同', 'soft'));
+  }
+  if (pair.changedFields.includes('name')) {
+    badges.push(renderCompareBadge('标题', 'soft'));
+  }
+  if (pair.changedFields.includes('role')) {
+    badges.push(renderCompareBadge('角色', 'soft'));
+  }
+  if (pair.changedFields.includes('enabled')) {
+    badges.push(renderCompareBadge('开关', 'soft'));
+  }
+  return badges.join('');
+}
+
+function renderCompareContentPane(
+  side: 'source' | 'target',
+  entry: PromptEntry | undefined,
+  contentLength: number,
+): string {
+  const label = side === 'source' ? '来源' : '目标';
+  const role = entry?.role ?? '-';
+  const enabled = entry ? (entry.enabled ? '启用' : '禁用') : '-';
+  const name = entry?.name ?? `此侧无匹配条目`;
+
+  return `
+    <div class="pm-compare-pane" data-compare-side="${side}">
+      <div class="pm-compare-pane-head">
+        <strong>${label}</strong>
+        <span>${escapeHtml(role)} · ${enabled} · ${contentLength} 字</span>
+      </div>
+      <div class="pm-compare-pane-title">${escapeHtml(name)}</div>
+      ${
+        entry
+          ? `<textarea class="pm-compare-text" name="compare${side === 'source' ? 'Source' : 'Target'}Content" readonly spellcheck="false" aria-label="${label}正文">${escapeHtml(entry.content)}</textarea>`
+          : '<div class="pm-compare-empty">无匹配条目</div>'
+      }
+    </div>
   `;
 }
 
@@ -1469,14 +1729,20 @@ function formatVersionSwitchAction(relation: VersionRelation | null): string {
 }
 
 function getSourceEntries(): PromptEntry[] {
-  const preset = getEditableSourceDraft();
-  return preset ? filterEntries(listPromptEntries(deepClone(preset)), state.sourceQuery, state.sourceFilter) : [];
+  return filterEntries(getSourceCompareEntries(), state.sourceQuery, state.sourceFilter);
 }
 
 function getTargetEntries(): PromptEntry[] {
-  return state.targetDraft
-    ? filterEntries(listPromptEntries(state.targetDraft), state.targetQuery, state.targetFilter)
-    : [];
+  return filterEntries(getTargetCompareEntries(), state.targetQuery, state.targetFilter);
+}
+
+function getSourceCompareEntries(): PromptEntry[] {
+  const preset = getEditableSourceDraft();
+  return preset ? listPromptEntries(deepClone(preset)) : [];
+}
+
+function getTargetCompareEntries(): PromptEntry[] {
+  return state.targetDraft ? listPromptEntries(state.targetDraft) : [];
 }
 
 function filterEntries(entries: PromptEntry[], query: string, filter: FilterValue): PromptEntry[] {
@@ -1509,6 +1775,38 @@ function getDetailSelection(): DetailSelection | null {
 
 function getEntriesForKind(kind: SelectableEntryKind): PromptEntry[] {
   return kind === 'source' ? getSourceEntries() : getTargetEntries();
+}
+
+function toggleCompareMode(): void {
+  state.compareMode = !state.compareMode;
+  if (state.compareMode) {
+    setMultiSelectEnabled('source', false);
+    setMultiSelectEnabled('target', false);
+    state.selectedSourceId = '';
+    state.selectedTargetId = '';
+    pointerDrag = null;
+    clearDropMarkers();
+    state.notice = '已开启比对模式';
+  } else {
+    state.compareFilter = 'all';
+    state.notice = '已关闭比对模式';
+  }
+  render();
+}
+
+function setCompareFilter(filter: string | undefined): void {
+  if (!isCompareFilterValue(filter)) {
+    return;
+  }
+  state.compareMode = true;
+  state.compareFilter = state.compareFilter === filter ? 'all' : filter;
+  state.selectedSourceId = '';
+  state.selectedTargetId = '';
+  render();
+}
+
+function isCompareFilterValue(value: string | undefined): value is CompareFilterValue {
+  return ['same', 'content', 'source_only', 'target_only', 'metadata'].includes(value ?? '');
 }
 
 function isMultiSelectEnabled(kind: SelectableEntryKind): boolean {
@@ -1803,6 +2101,12 @@ function onKeyDown(event: KeyboardEvent): void {
 async function handleAction(action: string, element: HTMLElement): Promise<void> {
   clearMessage();
 
+  if (state.compareMode && isCompareReadOnlyBlockedAction(action)) {
+    state.notice = '比对模式下不会修改预设';
+    render();
+    return;
+  }
+
   switch (action) {
     case 'backdrop-close':
     case 'close':
@@ -1846,6 +2150,12 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
     case 'tab':
       state.activeTab = (element.dataset.tab as MobileTab | undefined) ?? 'source';
       render();
+      return;
+    case 'toggle-compare':
+      toggleCompareMode();
+      return;
+    case 'set-compare-filter':
+      setCompareFilter(element.dataset.compareFilter);
       return;
     case 'select-source':
     case 'select-target':
@@ -1929,6 +2239,35 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
     default:
       return;
   }
+}
+
+function isCompareReadOnlyBlockedAction(action: string): boolean {
+  return [
+    'preset-copy',
+    'preset-rename',
+    'preset-delete',
+    'entry-multi-toggle',
+    'entry-select-toggle',
+    'entry-select-all',
+    'entry-clear-selection',
+    'entry-batch-favorite',
+    'entry-batch-delete',
+    'entry-toggle-enabled',
+    'source-remove',
+    'copy-source',
+    'copy-selected',
+    'favorite-source',
+    'favorite-target',
+    'favorite-selected',
+    'target-up',
+    'target-down',
+    'target-remove',
+    'insert-favorite',
+    'insert-favorite-id',
+    'delete-favorite',
+    'reset-draft',
+    'save',
+  ].includes(action);
 }
 
 function closeManager(): void {
@@ -2765,7 +3104,7 @@ function diagnose(stage: string, details?: Record<string, unknown>): void {
   debugEntries = [...debugEntries, entry].slice(-DEBUG_ENTRY_LIMIT);
 
   try {
-    console.info('[预设缝合管理器]', stage, details ?? {});
+    console.info(`[${APP_NAME}]`, stage, details ?? {});
   } catch {
     // ignored
   }
@@ -2834,6 +3173,11 @@ function getRuntimeDiagnostics(): Record<string, unknown> {
 }
 
 function onDragStart(event: DragEvent): void {
+  if (state.compareMode) {
+    event.preventDefault();
+    return;
+  }
+
   const target = toElement(event.target);
   const row = target?.closest<HTMLElement>('.pm-row');
   if (!row || !event.dataTransfer) {
@@ -2852,6 +3196,10 @@ function onDragStart(event: DragEvent): void {
 }
 
 function onDragOver(event: DragEvent): void {
+  if (state.compareMode) {
+    return;
+  }
+
   const target = toElement(event.target);
   if (target?.closest('[data-drop-zone], .pm-row[data-entry-kind="target"]')) {
     event.preventDefault();
@@ -2862,6 +3210,10 @@ function onDragOver(event: DragEvent): void {
 function onDrop(event: DragEvent): void {
   event.preventDefault();
   clearDropMarkers();
+  if (state.compareMode) {
+    return;
+  }
+
   const raw = event.dataTransfer?.getData('application/x-preset-manager');
   if (!raw || !state.targetDraft) {
     return;
@@ -2876,6 +3228,10 @@ function onDrop(event: DragEvent): void {
 }
 
 function onPointerDown(event: PointerEvent): void {
+  if (state.compareMode) {
+    return;
+  }
+
   if (event.button !== 0 && event.pointerType === 'mouse') {
     return;
   }

@@ -1,4 +1,4 @@
-export const APP_VERSION = 'v1.32';
+export const APP_VERSION = 'v2.00';
 
 export type VersionRelation = 'current' | 'newer' | 'older';
 export type ScriptScope = 'global' | 'preset' | 'character';
@@ -83,7 +83,12 @@ type FoundScript = {
 
 type ImportParseResult =
   | { status: 'versioned' | 'main'; specifier: string; importUrl: string; importTemplate: string }
-  | { status: 'no_import' | 'ambiguous' | 'unsupported'; specifier?: string; importUrl?: string; importTemplate?: string };
+  | {
+      status: 'no_import' | 'ambiguous' | 'unsupported';
+      specifier?: string;
+      importUrl?: string;
+      importTemplate?: string;
+    };
 
 export type VersionImportTemplateValidation =
   | { ok: true; template: string }
@@ -212,9 +217,7 @@ export function sortStableVersionTags(tags: unknown[], limit = 20): string[] {
     stableTags.push(tag);
   }
 
-  return stableTags
-    .sort((left, right) => compareVersionTags(right, left))
-    .slice(0, limit);
+  return stableTags.sort((left, right) => compareVersionTags(right, left)).slice(0, limit);
 }
 
 export async function fetchVersionCatalog(options: {
@@ -242,14 +245,17 @@ export async function fetchVersionCatalog(options: {
     errors.push(normalizeUnknownError(error, '无法读取版本列表。'));
     return [];
   });
-  const mergedVersions = sortStableVersionTags([...versions, latestFromRelease, options.currentVersion].filter(Boolean), limit);
+  const mergedVersions = sortStableVersionTags(
+    [...versions, latestFromRelease, options.currentVersion].filter(Boolean),
+    limit,
+  );
   const latestVersion = latestFromRelease ?? mergedVersions[0] ?? null;
 
   return {
     latestVersion,
     versions: mergedVersions,
     checkedAt: Date.now(),
-    errorMessage: latestVersion || mergedVersions.length ? null : errors[0] ?? '没有找到可用版本。',
+    errorMessage: latestVersion || mergedVersions.length ? null : (errors[0] ?? '没有找到可用版本。'),
   };
 }
 
@@ -271,7 +277,9 @@ export function inspectCurrentScriptVersion(api: ScriptApi = globalThis as unkno
   const foundScripts: FoundScript[] = [];
   for (const scope of SCRIPT_SCOPES) {
     try {
-      foundScripts.push(...findScriptsById(api.getScriptTrees({ type: scope }), scriptId).map(script => ({ script, scope })));
+      foundScripts.push(
+        ...findScriptsById(api.getScriptTrees({ type: scope }), scriptId).map(script => ({ script, scope })),
+      );
     } catch {
       // Some scopes can be unavailable depending on where the script is installed.
     }
@@ -376,11 +384,14 @@ export async function replaceCurrentScriptVersion(
 
   let changed = false;
   await Promise.resolve(
-    api.updateScriptTreesWith(scriptTrees => {
-      const result = replaceScriptImportInTree(scriptTrees, source.scriptId, targetImportUrl);
-      changed = result.changed;
-      return result.trees;
-    }, { type: source.scope }),
+    api.updateScriptTreesWith(
+      scriptTrees => {
+        const result = replaceScriptImportInTree(scriptTrees, source.scriptId, targetImportUrl);
+        changed = result.changed;
+        return result.trees;
+      },
+      { type: source.scope },
+    ),
   );
 
   if (!changed) {
@@ -425,9 +436,11 @@ function replaceScriptImportInTree(
   targetImportUrl: string,
 ): { trees: ScriptNode[]; changed: boolean } {
   let changed = false;
-  const trees = scriptTrees.map(node => mapScriptNode(node, scriptId, targetImportUrl, () => {
-    changed = true;
-  }));
+  const trees = scriptTrees.map(node =>
+    mapScriptNode(node, scriptId, targetImportUrl, () => {
+      changed = true;
+    }),
+  );
   return { trees, changed };
 }
 
@@ -516,13 +529,16 @@ async function fetchRepositoryTags(fetcher: FetchLike, limit: number): Promise<s
   });
   if (!response.ok) throw new Error(`GitHub tags API 返回 ${response.status}`);
   const payload = (await response.json()) as Array<{ name?: unknown }>;
-  return sortStableVersionTags(payload.map(tag => tag.name), limit);
+  return sortStableVersionTags(
+    payload.map(tag => tag.name),
+    limit,
+  );
 }
 
 function sourceStatusMessage(status: ImportParseResult['status']): string {
-  if (status === 'ambiguous') return '脚本中包含多个预设缝合管理器 import，无法安全自动修改。';
-  if (status === 'unsupported') return '脚本使用的预设缝合管理器版本格式不支持自动修改。';
-  return '当前脚本不是标准的预设缝合管理器 import。';
+  if (status === 'ambiguous') return '脚本中包含多个预设管理 import，无法安全自动修改。';
+  if (status === 'unsupported') return '脚本使用的预设管理版本格式不支持自动修改。';
+  return '当前脚本不是标准的预设管理 import。';
 }
 
 function normalizeUnknownError(error: unknown, fallback: string): string {

@@ -57,6 +57,41 @@ export interface PresetValidation {
   promptsWithoutIdentifiers: number;
 }
 
+export type PromptCompareSide = 'source' | 'target';
+export type PromptCompareMatchKind = 'identifier' | 'name';
+export type PromptCompareStatus = 'matched' | 'source_only' | 'target_only';
+export type PromptCompareChangedField = 'content' | 'name' | 'role' | 'enabled';
+export type PromptContentDiffKind = 'same' | 'source' | 'target' | 'changed-source' | 'changed-target';
+
+export interface PromptContentDiffLine {
+  kind: PromptContentDiffKind;
+  sourceLine?: string;
+  targetLine?: string;
+}
+
+export interface PromptComparePair {
+  key: string;
+  status: PromptCompareStatus;
+  matchKind?: PromptCompareMatchKind;
+  sourceEntry?: PromptEntry;
+  targetEntry?: PromptEntry;
+  changedFields: PromptCompareChangedField[];
+  contentDiff: PromptContentDiffLine[];
+}
+
+export interface PromptCompareResult {
+  pairs: PromptComparePair[];
+  sourceById: Map<string, PromptComparePair>;
+  targetById: Map<string, PromptComparePair>;
+  summary: {
+    same: number;
+    contentChanged: number;
+    sourceOnly: number;
+    targetOnly: number;
+    metadataChanged: number;
+  };
+}
+
 const PROMPT_FIELDS = [
   'id',
   'identifier',
@@ -502,9 +537,186 @@ export function getContentLength(prompt: Prompt): number {
   return getPromptContent(prompt).length;
 }
 
+export function comparePromptEntries(sourceEntries: PromptEntry[], targetEntries: PromptEntry[]): PromptCompareResult {
+  const pairs: PromptComparePair[] = [];
+  const sourceById = new Map<string, PromptComparePair>();
+  const targetById = new Map<string, PromptComparePair>();
+  const matchedSourceIds = new Set<string>();
+  const matchedTargetIds = new Set<string>();
+  const sourceByIdentifier = groupEntries(sourceEntries, entry => entry.id);
+  const targetByIdentifier = groupEntries(targetEntries, entry => entry.id);
+
+  for (const [identifier, sources] of sourceByIdentifier) {
+    const targets = targetByIdentifier.get(identifier);
+    if (sources.length !== 1 || targets?.length !== 1) {
+      continue;
+    }
+    addMatchedPair(pairs, sourceById, targetById, sources[0], targets[0], 'identifier');
+    matchedSourceIds.add(sources[0].id);
+    matchedTargetIds.add(targets[0].id);
+  }
+
+  const unmatchedSources = sourceEntries.filter(entry => !matchedSourceIds.has(entry.id));
+  const unmatchedTargets = targetEntries.filter(entry => !matchedTargetIds.has(entry.id));
+  const sourceByName = groupEntries(unmatchedSources, entry => normalizeCompareName(entry.name));
+  const targetByName = groupEntries(unmatchedTargets, entry => normalizeCompareName(entry.name));
+
+  for (const [name, sources] of sourceByName) {
+    const targets = targetByName.get(name);
+    if (!name || sources.length !== 1 || targets?.length !== 1) {
+      continue;
+    }
+    addMatchedPair(pairs, sourceById, targetById, sources[0], targets[0], 'name');
+    matchedSourceIds.add(sources[0].id);
+    matchedTargetIds.add(targets[0].id);
+  }
+
+  for (const entry of sourceEntries) {
+    if (matchedSourceIds.has(entry.id)) {
+      continue;
+    }
+    const pair = createOnlyPair('source', entry);
+    pairs.push(pair);
+    sourceById.set(entry.id, pair);
+  }
+
+  for (const entry of targetEntries) {
+    if (matchedTargetIds.has(entry.id)) {
+      continue;
+    }
+    const pair = createOnlyPair('target', entry);
+    pairs.push(pair);
+    targetById.set(entry.id, pair);
+  }
+
+  return {
+    pairs,
+    sourceById,
+    targetById,
+    summary: summarizeComparePairs(pairs),
+  };
+}
+
+export function diffPromptContent(sourceContent: string, targetContent: string): PromptContentDiffLine[] {
+  const sourceLines = normalizeCompareContent(sourceContent).split('\n');
+  const targetLines = normalizeCompareContent(targetContent).split('\n');
+  const maxLength = Math.max(sourceLines.length, targetLines.length);
+  const diff: PromptContentDiffLine[] = [];
+
+  for (let index = 0; index < maxLength; index += 1) {
+    const hasSource = index < sourceLines.length;
+    const hasTarget = index < targetLines.length;
+    const sourceLine = sourceLines[index] ?? '';
+    const targetLine = targetLines[index] ?? '';
+    if (hasSource && hasTarget && sourceLine === targetLine) {
+      diff.push({ kind: 'same', sourceLine, targetLine });
+    } else if (hasSource && hasTarget) {
+      diff.push({ kind: 'changed-source', sourceLine, targetLine });
+      diff.push({ kind: 'changed-target', sourceLine, targetLine });
+    } else if (hasSource) {
+      diff.push({ kind: 'source', sourceLine });
+    } else if (hasTarget) {
+      diff.push({ kind: 'target', targetLine });
+    }
+  }
+
+  return diff;
+}
+
 function findPrompt(targetPreset: Preset, identifier: string): Prompt | undefined {
   const shaped = ensurePresetShape(targetPreset);
   return (shaped.prompts ?? []).find(prompt => getPromptIdentifier(prompt) === identifier);
+}
+
+function addMatchedPair(
+  pairs: PromptComparePair[],
+  sourceById: Map<string, PromptComparePair>,
+  targetById: Map<string, PromptComparePair>,
+  sourceEntry: PromptEntry,
+  targetEntry: PromptEntry,
+  matchKind: PromptCompareMatchKind,
+): void {
+  const changedFields = getChangedFields(sourceEntry, targetEntry);
+  const pair: PromptComparePair = {
+    key: `${sourceEntry.id}::${targetEntry.id}`,
+    status: 'matched',
+    matchKind,
+    sourceEntry,
+    targetEntry,
+    changedFields,
+    contentDiff: changedFields.includes('content') ? diffPromptContent(sourceEntry.content, targetEntry.content) : [],
+  };
+  pairs.push(pair);
+  sourceById.set(sourceEntry.id, pair);
+  targetById.set(targetEntry.id, pair);
+}
+
+function createOnlyPair(side: PromptCompareSide, entry: PromptEntry): PromptComparePair {
+  return {
+    key: `${side}:${entry.id}`,
+    status: side === 'source' ? 'source_only' : 'target_only',
+    sourceEntry: side === 'source' ? entry : undefined,
+    targetEntry: side === 'target' ? entry : undefined,
+    changedFields: ['content'],
+    contentDiff: [],
+  };
+}
+
+function getChangedFields(sourceEntry: PromptEntry, targetEntry: PromptEntry): PromptCompareChangedField[] {
+  const changedFields: PromptCompareChangedField[] = [];
+  if (normalizeCompareContent(sourceEntry.content) !== normalizeCompareContent(targetEntry.content)) {
+    changedFields.push('content');
+  }
+  if (sourceEntry.name !== targetEntry.name) {
+    changedFields.push('name');
+  }
+  if (sourceEntry.role !== targetEntry.role) {
+    changedFields.push('role');
+  }
+  if (sourceEntry.enabled !== targetEntry.enabled) {
+    changedFields.push('enabled');
+  }
+  return changedFields;
+}
+
+function summarizeComparePairs(pairs: PromptComparePair[]): PromptCompareResult['summary'] {
+  return pairs.reduce(
+    (summary, pair) => {
+      if (pair.status === 'source_only') {
+        summary.sourceOnly += 1;
+      } else if (pair.status === 'target_only') {
+        summary.targetOnly += 1;
+      } else if (pair.changedFields.includes('content')) {
+        summary.contentChanged += 1;
+      } else if (pair.changedFields.length) {
+        summary.metadataChanged += 1;
+      } else {
+        summary.same += 1;
+      }
+      return summary;
+    },
+    { same: 0, contentChanged: 0, sourceOnly: 0, targetOnly: 0, metadataChanged: 0 },
+  );
+}
+
+function groupEntries(entries: PromptEntry[], getKey: (entry: PromptEntry) => string): Map<string, PromptEntry[]> {
+  const grouped = new Map<string, PromptEntry[]>();
+  for (const entry of entries) {
+    const key = getKey(entry);
+    if (!key) {
+      continue;
+    }
+    grouped.set(key, [...(grouped.get(key) ?? []), entry]);
+  }
+  return grouped;
+}
+
+function normalizeCompareName(name: string): string {
+  return name.trim();
+}
+
+function normalizeCompareContent(content: string): string {
+  return content.replace(/\r\n?/g, '\n');
 }
 
 function getUniqueIdentifier(preset: Preset, preferred: string | undefined): string {

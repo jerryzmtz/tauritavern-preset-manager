@@ -126,7 +126,7 @@ const target = presets.find(preset => listEntries(preset.data).some(item => /夏
   ?? presets[presets.length - 1];
 
 if (!sourceNovel || !sourceLightNovel || !target) {
-  throw new Error('缺少用于缝合验证的 小说 / 轻小说 / 夏瑾目标预设条目');
+  throw new Error('缺少用于预设管理验证的 小说 / 轻小说 / 夏瑾目标预设条目');
 }
 
 const draft = clone(target.data);
@@ -137,7 +137,7 @@ const afterEntries = listEntries(draft);
 const validation = validatePreset(draft);
 
 if (!validation.ok) {
-  throw new Error(`缝合后结构无效：${JSON.stringify(validation, null, 2)}`);
+  throw new Error(`预设管理后结构无效：${JSON.stringify(validation, null, 2)}`);
 }
 
 if (afterEntries.length !== beforeCount + 2) {

@@ -42,6 +42,13 @@ const fixturePresets = [
       prompts: [
         { identifier: 'source-novel', name: '📔小说', role: 'system', content: '基调：叙事性小说\n特化：保持真实感。' },
         { identifier: 'source-light', name: '📕轻小说', role: 'system', content: '基调：日式轻文学\n人称：第一人称。' },
+        { identifier: 'shared-same', name: '共同正文相同', role: 'system', content: '共同第一行\n共同第二行' },
+        { identifier: 'shared-diff', name: '共同正文不同', role: 'system', content: '来源第一行\n来源第二行' },
+        { identifier: 'shared-meta', name: '来源标题不同', role: 'system', content: '辅助差异正文相同' },
+        { identifier: 'source-name-match', name: '唯一同名条目', role: 'system', content: '来源同名正文' },
+        { identifier: 'source-only-entry', name: '仅来源条目', role: 'user', content: '只在来源出现' },
+        { identifier: 'duplicate-source-a', name: '重复同名条目', role: 'system', content: '来源重复 A' },
+        { identifier: 'duplicate-source-b', name: '重复同名条目', role: 'system', content: '来源重复 B' },
       ],
       prompt_order: [
         {
@@ -49,6 +56,13 @@ const fixturePresets = [
           order: [
             { identifier: 'source-novel', enabled: true },
             { identifier: 'source-light', enabled: false },
+            { identifier: 'shared-same', enabled: true },
+            { identifier: 'shared-diff', enabled: true },
+            { identifier: 'shared-meta', enabled: true },
+            { identifier: 'source-name-match', enabled: true },
+            { identifier: 'source-only-entry', enabled: true },
+            { identifier: 'duplicate-source-a', enabled: true },
+            { identifier: 'duplicate-source-b', enabled: true },
           ],
         },
       ],
@@ -65,6 +79,12 @@ const fixturePresets = [
           role: 'user',
           content: '{{setvar::writingstyle::writing_style_1}}',
         },
+        { identifier: 'shared-same', name: '共同正文相同', role: 'system', content: '共同第一行\n共同第二行' },
+        { identifier: 'shared-diff', name: '共同正文不同', role: 'system', content: '目标第一行\n目标第二行' },
+        { identifier: 'shared-meta', name: '目标标题不同', role: 'user', content: '辅助差异正文相同' },
+        { identifier: 'target-name-match', name: '唯一同名条目', role: 'system', content: '目标同名正文' },
+        { identifier: 'target-only-entry', name: '仅目标条目', role: 'assistant', content: '只在目标出现' },
+        { identifier: 'duplicate-target-a', name: '重复同名条目', role: 'system', content: '目标重复 A' },
       ],
       prompt_order: [
         {
@@ -72,6 +92,12 @@ const fixturePresets = [
           order: [
             { identifier: 'target-style-heading', enabled: true },
             { identifier: 'target-default', enabled: true },
+            { identifier: 'shared-same', enabled: true },
+            { identifier: 'shared-diff', enabled: true },
+            { identifier: 'shared-meta', enabled: false },
+            { identifier: 'target-name-match', enabled: true },
+            { identifier: 'target-only-entry', enabled: true },
+            { identifier: 'duplicate-target-a', enabled: true },
           ],
         },
       ],
@@ -118,7 +144,7 @@ function serveFixture() {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>预设缝合测试</title>
+  <title>预设管理测试</title>
   <style>
     :root {
       --SmartThemeBodyColor: #efe8d4;
@@ -139,7 +165,7 @@ function serveFixture() {
   </style>
 </head>
 <body>
-  <main>中文测试：预设缝合管理器</main>
+  <main>中文测试：预设管理</main>
   <div id="script-buttons"></div>
   <script>
     window.__clonePreset = value => JSON.parse(JSON.stringify(value));
@@ -195,9 +221,9 @@ function serveFixture() {
       global: [{
         type: 'script',
         enabled: true,
-        name: '预设缝合管理器',
+        name: '预设管理',
         id: 'preset-manager-script-id',
-        content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v1.32/dist/preset-manager/index.js';",
+        content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v2.00/dist/preset-manager/index.js';",
         info: '',
         button: { enabled: true, buttons: [] },
         data: {},
@@ -210,13 +236,13 @@ function serveFixture() {
     window.fetch = (input, init) => {
       const href = String(input);
       if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/releases/latest') {
-        return Promise.resolve(new Response(JSON.stringify({ tag_name: 'v1.32' }), {
+        return Promise.resolve(new Response(JSON.stringify({ tag_name: 'v2.00' }), {
           status: 200,
           headers: { 'content-type': 'application/json; charset=utf-8' },
         }));
       }
       if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/tags?per_page=20') {
-        return Promise.resolve(new Response(JSON.stringify([{ name: 'v1.32' }, { name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }] ), {
+        return Promise.resolve(new Response(JSON.stringify([{ name: 'v2.00' }, { name: 'v1.32' }, { name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }] ), {
           status: 200,
           headers: { 'content-type': 'application/json; charset=utf-8' },
         }));
@@ -362,7 +388,7 @@ function serveFixture() {
   </style>
 </head>
 <body>
-  <main>父页面中文测试：预设缝合管理器</main>
+  <main>父页面中文测试：预设管理</main>
   <div id="script-buttons"></div>
   <iframe id="script-frame" title="zero-sized-script-frame" src="/zero-frame-child" style="width:0;height:0;border:0;display:block"></iframe>
   <script>
@@ -417,9 +443,9 @@ function serveFixture() {
         global: [{
           type: 'script',
           enabled: true,
-          name: '预设缝合管理器',
+          name: '预设管理',
           id: 'zero-frame-script-id',
-          content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v1.32/dist/preset-manager/index.js';",
+          content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v2.00/dist/preset-manager/index.js';",
           info: '',
           button: { enabled: true, buttons: [] },
           data: {},
@@ -432,13 +458,13 @@ function serveFixture() {
       child.fetch = (input, init) => {
         const href = String(input);
         if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/releases/latest') {
-          return Promise.resolve(new child.Response(JSON.stringify({ tag_name: 'v1.32' }), {
+          return Promise.resolve(new child.Response(JSON.stringify({ tag_name: 'v2.00' }), {
             status: 200,
             headers: { 'content-type': 'application/json; charset=utf-8' },
           }));
         }
         if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/tags?per_page=20') {
-          return Promise.resolve(new child.Response(JSON.stringify([{ name: 'v1.32' }, { name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }] ), {
+          return Promise.resolve(new child.Response(JSON.stringify([{ name: 'v2.00' }, { name: 'v1.32' }, { name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }] ), {
             status: 200,
             headers: { 'content-type': 'application/json; charset=utf-8' },
           }));
@@ -678,7 +704,7 @@ async function verifyDirectDragAndUnsavedClose(page, fixture, viewportName) {
   await page.evaluate(() => {
     window.__scriptButtonEventsEnabled = false;
   });
-  await page.getByRole('button', { name: /^预设缝合$/ }).click();
+  await page.getByRole('button', { name: /^预设管理$/ }).click();
   await page.locator('.pm-panel').waitFor({ state: 'visible' });
   await page.evaluate(() => {
     window.__scriptButtonEventsEnabled = true;
@@ -843,6 +869,182 @@ async function verifyEntryToggleDraft(page, fixture, viewportName) {
     throw new Error(`${viewportName}: 目标条目开关恢复启用后没有同时保存到命名预设和 in_use`);
   }
   await verifyNoPresetManagerBackups(page, viewportName);
+}
+
+async function verifyCompareMode(page, fixture, viewportName) {
+  await page.locator('select[name="sourceName"]').selectOption('雪月agent_v1（自改）');
+  await page.locator('select[name="targetName"]').selectOption('夏瑾二改（自用）');
+  fixture.clearSavedPreset();
+
+  const compareButton = page.locator('[data-action="toggle-compare"]');
+  await compareButton.click();
+  await page.waitForFunction(
+    () => document.querySelector('[data-action="toggle-compare"]')?.getAttribute('aria-pressed') === 'true',
+  );
+  const summaryText = await page.locator('.pm-compare-summary').innerText();
+  for (const expected of ['正文不同', '仅来源', '仅目标', '辅助差异']) {
+    if (!summaryText.includes(expected)) {
+      throw new Error(`${viewportName}: 比对摘要缺少 ${expected}`);
+    }
+  }
+
+  const sourceDiff = rowByTitle(page, '.pm-pane-source', '共同正文不同').first();
+  const targetDiff = rowByTitle(page, '.pm-pane-target', '共同正文不同').first();
+  await assertRowClass(sourceDiff, 'is-compare-content-different', `${viewportName}: 来源正文差异未高亮`);
+  await assertRowClass(targetDiff, 'is-compare-content-different', `${viewportName}: 目标正文差异未高亮`);
+  if (!(await sourceDiff.innerText()).includes('正文不同') || !(await targetDiff.innerText()).includes('正文不同')) {
+    throw new Error(`${viewportName}: 正文不同条目没有显示徽标`);
+  }
+
+  const sourceSame = rowByTitle(page, '.pm-pane-source', '共同正文相同').first();
+  await assertRowNotClass(sourceSame, 'is-compare-content-different', `${viewportName}: 正文相同条目不应强高亮`);
+
+  const metadataOnly = rowByTitle(page, '.pm-pane-source', '来源标题不同').first();
+  await assertRowNotClass(metadataOnly, 'is-compare-content-different', `${viewportName}: 仅辅助差异不应强高亮`);
+  const metadataText = await metadataOnly.innerText();
+  if (!metadataText.includes('标题') || !metadataText.includes('角色') || !metadataText.includes('开关')) {
+    throw new Error(`${viewportName}: 辅助差异没有显示标题/角色/开关徽标`);
+  }
+
+  const sourceNameMatch = rowByTitle(page, '.pm-pane-source', '唯一同名条目').first();
+  const targetNameMatch = rowByTitle(page, '.pm-pane-target', '唯一同名条目').first();
+  await assertRowClass(sourceNameMatch, 'is-compare-content-different', `${viewportName}: 同名匹配来源差异未高亮`);
+  await assertRowClass(targetNameMatch, 'is-compare-content-different', `${viewportName}: 同名匹配目标差异未高亮`);
+  if (!(await sourceNameMatch.innerText()).includes('同名匹配')) {
+    throw new Error(`${viewportName}: 同名匹配条目没有提示匹配方式`);
+  }
+
+  await assertRowClass(
+    rowByTitle(page, '.pm-pane-source', '仅来源条目').first(),
+    'is-compare-only',
+    `${viewportName}: 仅来源条目未高亮`,
+  );
+  await assertRowClass(
+    rowByTitle(page, '.pm-pane-target', '仅目标条目').first(),
+    'is-compare-only',
+    `${viewportName}: 仅目标条目未高亮`,
+  );
+
+  const duplicateSourceRows = rowByTitle(page, '.pm-pane-source', '重复同名条目');
+  const duplicateTargetRows = rowByTitle(page, '.pm-pane-target', '重复同名条目');
+  if ((await duplicateSourceRows.count()) !== 2 || (await duplicateTargetRows.count()) !== 1) {
+    throw new Error(`${viewportName}: 重复同名测试夹具数量不正确`);
+  }
+  await assertRowClass(
+    duplicateSourceRows.nth(0),
+    'is-compare-only',
+    `${viewportName}: 重复同名来源条目不应被强行匹配`,
+  );
+  await assertRowClass(
+    duplicateSourceRows.nth(1),
+    'is-compare-only',
+    `${viewportName}: 重复同名来源条目不应被强行匹配`,
+  );
+  await assertRowClass(
+    duplicateTargetRows.first(),
+    'is-compare-only',
+    `${viewportName}: 重复同名目标条目不应被强行匹配`,
+  );
+  if ((await duplicateSourceRows.first().innerText()).includes('同名匹配')) {
+    throw new Error(`${viewportName}: 重复同名条目被错误标成同名匹配`);
+  }
+
+  await page.locator('[data-compare-filter="content"]').click();
+  await page.waitForFunction(
+    () => document.querySelector('[data-compare-filter="content"]')?.getAttribute('aria-pressed') === 'true',
+  );
+  if ((await rowByTitle(page, '.pm-pane-source', '共同正文相同').count()) !== 0) {
+    throw new Error(`${viewportName}: 正文不同过滤不应显示正文相同条目`);
+  }
+  if ((await rowByTitle(page, '.pm-pane-source', '共同正文不同').count()) !== 1) {
+    throw new Error(`${viewportName}: 正文不同过滤应保留来源正文差异条目`);
+  }
+  await page.locator('select[name="targetFilter"]').selectOption('assistant');
+  if ((await rowByTitle(page, '.pm-pane-source', '共同正文不同').count()) !== 1) {
+    throw new Error(`${viewportName}: 比对配对关系不应被目标侧普通过滤重新判定`);
+  }
+  await page.locator('select[name="targetFilter"]').selectOption('all');
+  await page.locator('select[name="sourceFilter"]').selectOption('user');
+  if ((await page.locator('.pm-pane-source .pm-row').count()) !== 0) {
+    throw new Error(`${viewportName}: 比对过滤应与来源现有过滤保持且关系`);
+  }
+  await page.locator('select[name="sourceFilter"]').selectOption('all');
+
+  await page.locator('[data-compare-filter="source_only"]').click();
+  await page.waitForFunction(
+    () => document.querySelector('[data-compare-filter="source_only"]')?.getAttribute('aria-pressed') === 'true',
+  );
+  if (
+    (await rowByTitle(page, '.pm-pane-source', '仅来源条目').count()) !== 1 ||
+    (await page.locator('.pm-pane-target .pm-row').count()) !== 0
+  ) {
+    throw new Error(`${viewportName}: 仅来源过滤没有只保留来源侧独有条目`);
+  }
+  await page.locator('[data-compare-filter="source_only"]').click();
+  await page.waitForFunction(
+    () => document.querySelector('[data-compare-filter="source_only"]')?.getAttribute('aria-pressed') === 'false',
+  );
+
+  if (!(await sourceDiff.locator('.pm-row-toggle').isDisabled())) {
+    throw new Error(`${viewportName}: 比对模式下条目开关应禁用`);
+  }
+  if (!(await page.getByRole('button', { name: /保存预设/ }).isDisabled())) {
+    throw new Error(`${viewportName}: 比对模式下保存按钮应禁用`);
+  }
+
+  await sourceDiff.click();
+  await page.locator('.pm-compare-detail').waitFor({ state: 'visible' });
+  const detailText = await page.locator('.pm-compare-detail').innerText();
+  if (!detailText.includes('正文不同')) {
+    throw new Error(`${viewportName}: 比对详情缺少正文不同状态`);
+  }
+  const sourceCompareText = page.locator('textarea[name="compareSourceContent"]');
+  const targetCompareText = page.locator('textarea[name="compareTargetContent"]');
+  if (
+    !(await sourceCompareText.inputValue()).includes('来源第一行') ||
+    !(await targetCompareText.inputValue()).includes('目标第一行') ||
+    (await sourceCompareText.getAttribute('readonly')) === null ||
+    (await targetCompareText.getAttribute('readonly')) === null
+  ) {
+    throw new Error(`${viewportName}: 比对详情没有使用清晰的只读双文本框`);
+  }
+  if (await page.locator('textarea[name="detailContent"]').count()) {
+    throw new Error(`${viewportName}: 比对模式详情不应提供可编辑正文框`);
+  }
+
+  await page.locator('input[name="sourceQuery"]').fill('共同');
+  await page.locator('select[name="sourceFilter"]').selectOption('system');
+  if (fixture.getSavedPreset() !== null) {
+    throw new Error(`${viewportName}: 比对模式搜索或过滤不应调用保存接口`);
+  }
+  await page.locator('input[name="sourceQuery"]').fill('');
+  await page.locator('select[name="sourceFilter"]').selectOption('all');
+
+  await compareButton.click();
+  await page.waitForFunction(
+    () => document.querySelector('[data-action="toggle-compare"]')?.getAttribute('aria-pressed') === 'false',
+  );
+  if (fixture.getSavedPreset() !== null) {
+    throw new Error(`${viewportName}: 开关比对模式不应调用保存接口`);
+  }
+}
+
+function rowByTitle(page, paneSelector, title) {
+  return page.locator(`${paneSelector} .pm-row`).filter({ hasText: title });
+}
+
+async function assertRowClass(row, className, message) {
+  const classValue = (await row.getAttribute('class')) ?? '';
+  if (!classValue.split(/\s+/).includes(className)) {
+    throw new Error(message);
+  }
+}
+
+async function assertRowNotClass(row, className, message) {
+  const classValue = (await row.getAttribute('class')) ?? '';
+  if (classValue.split(/\s+/).includes(className)) {
+    throw new Error(message);
+  }
 }
 
 async function verifyNoPresetManagerBackups(page, viewportName) {
@@ -1084,7 +1286,7 @@ async function verifyZeroSizedIframeParentMount(browser, fixture) {
   await page.goto(`${fixture.url}/zero-frame-host`);
   await page.waitForFunction(() => {
     const child = document.getElementById('script-frame')?.contentWindow;
-    return child?.__registeredEvents?.includes('helper-button:预设缝合');
+    return child?.__registeredEvents?.includes('helper-button:预设管理');
   });
 
   const frameMetrics = await page.evaluate(() => {
@@ -1105,7 +1307,7 @@ async function verifyZeroSizedIframeParentMount(browser, fixture) {
     throw new Error('zero-frame: 测试夹具没有形成 0x0 脚本 iframe');
   }
 
-  await page.getByRole('button', { name: /^预设缝合$/ }).click();
+  await page.getByRole('button', { name: /^预设管理$/ }).click();
   await page
     .locator('body > #tt-preset-stitcher-host #tt-preset-stitcher-root .pm-panel')
     .waitFor({ state: 'visible' });
@@ -1149,7 +1351,7 @@ try {
   for (const viewport of viewports) {
     const page = await browser.newPage({ viewport: { width: viewport.width, height: viewport.height } });
     await page.goto(fixture.url);
-    await page.waitForFunction(() => window.__registeredEvents?.includes('helper-button:预设缝合'));
+    await page.waitForFunction(() => window.__registeredEvents?.includes('helper-button:预设管理'));
     const buttonApiStats = await page.evaluate(() => ({
       updateCalls: window.__updateScriptButtonsWithCalls,
       replaceCalls: window.__replaceScriptButtonsCalls,
@@ -1157,18 +1359,18 @@ try {
     if (buttonApiStats.updateCalls < 1 || buttonApiStats.replaceCalls !== 0) {
       throw new Error(`${viewport.name}: 脚本按钮没有通过 updateScriptButtonsWith 注册`);
     }
-    await page.getByRole('button', { name: /^预设缝合$/ }).click();
+    await page.getByRole('button', { name: /^预设管理$/ }).click();
     await page.locator('.pm-panel').waitFor({ state: 'visible' });
 
     const bodyText = await page.locator('body').innerText();
-    if (!bodyText.includes('预设缝合管理器') || bodyText.includes('????')) {
+    if (!bodyText.includes('预设管理') || bodyText.includes('????')) {
       throw new Error(`${viewport.name}: 中文 DOM 文本验证失败`);
     }
     if (!bodyText.includes('条目详情') || bodyText.includes('草稿') || bodyText.includes('结构正常')) {
       throw new Error(`${viewport.name}: 出现了应移除的旧文案`);
     }
     const versionText = await page.locator('.pm-version-chip').textContent();
-    if (versionText?.trim() !== 'v1.32') {
+    if (versionText?.trim() !== 'v2.00') {
       throw new Error(`${viewport.name}: 标题旁没有显示当前版本号`);
     }
 
@@ -1197,7 +1399,7 @@ try {
     if (viewport.name === 'desktop-wide') {
       await page.locator('.pm-version-button').click();
       await page.locator('.pm-version-box').waitFor({ state: 'visible' });
-      await page.waitForFunction(() => document.body.innerText.includes('v1.32'));
+      await page.waitForFunction(() => document.body.innerText.includes('v2.00'));
       if (await page.locator('.pm-version-row[data-version="v0.99"]').count()) {
         throw new Error(`${viewport.name}: 版本列表不应显示 v1.0.0 以前的版本`);
       }
@@ -1265,6 +1467,7 @@ try {
     if (viewport.name === 'desktop-wide') {
       await verifySourceDetailEditing(page, fixture, viewport.name);
       await verifyEntryToggleDraft(page, fixture, viewport.name);
+      await verifyCompareMode(page, fixture, viewport.name);
       await verifyPresetActions(page, fixture, viewport.name);
       await verifySourceDeleteDraft(page, fixture, viewport.name);
       await verifyMultiSelectOperations(page, fixture, viewport.name);
