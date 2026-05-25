@@ -63,6 +63,8 @@ export type PromptCompareStatus = 'matched' | 'source_only' | 'target_only';
 export type PromptCompareChangedField = 'content' | 'name' | 'role' | 'enabled';
 export type PromptContentDiffKind = 'same' | 'source' | 'target' | 'changed-source' | 'changed-target';
 
+const COMPARE_MATCH_DICE_THRESHOLD = 0.08;
+
 export interface PromptContentDiffLine {
   kind: PromptContentDiffKind;
   sourceLine?: string;
@@ -544,13 +546,14 @@ export function comparePromptEntries(sourceEntries: PromptEntry[], targetEntries
   const targetByIdentifier = groupEntries(targetEntries, entry => entry.id);
 
   for (const [identifier, sources] of sourceByIdentifier) {
-    const targets = targetByIdentifier.get(identifier);
-    if (sources.length !== 1 || targets?.length !== 1) {
+    const candidate = getConfidentCompareCandidate(sources, targetByIdentifier.get(identifier));
+    if (!candidate) {
       continue;
     }
-    addMatchedPair(pairs, sourceById, targetById, sources[0], targets[0], 'identifier');
-    matchedSourceIds.add(sources[0].id);
-    matchedTargetIds.add(targets[0].id);
+    const [sourceEntry, targetEntry] = candidate;
+    addMatchedPair(pairs, sourceById, targetById, sourceEntry, targetEntry, 'identifier');
+    matchedSourceIds.add(sourceEntry.id);
+    matchedTargetIds.add(targetEntry.id);
   }
 
   const unmatchedSources = sourceEntries.filter(entry => !matchedSourceIds.has(entry.id));
@@ -559,13 +562,14 @@ export function comparePromptEntries(sourceEntries: PromptEntry[], targetEntries
   const targetByName = groupEntries(unmatchedTargets, entry => normalizeCompareName(entry.name));
 
   for (const [name, sources] of sourceByName) {
-    const targets = targetByName.get(name);
-    if (!name || sources.length !== 1 || targets?.length !== 1) {
+    const candidate = name ? getConfidentCompareCandidate(sources, targetByName.get(name)) : null;
+    if (!candidate) {
       continue;
     }
-    addMatchedPair(pairs, sourceById, targetById, sources[0], targets[0], 'name');
-    matchedSourceIds.add(sources[0].id);
-    matchedTargetIds.add(targets[0].id);
+    const [sourceEntry, targetEntry] = candidate;
+    addMatchedPair(pairs, sourceById, targetById, sourceEntry, targetEntry, 'name');
+    matchedSourceIds.add(sourceEntry.id);
+    matchedTargetIds.add(targetEntry.id);
   }
 
   for (const entry of sourceEntries) {
@@ -674,6 +678,59 @@ function getChangedFields(sourceEntry: PromptEntry, targetEntry: PromptEntry): P
     changedFields.push('enabled');
   }
   return changedFields;
+}
+
+function getConfidentCompareCandidate(
+  sources: PromptEntry[],
+  targets: PromptEntry[] | undefined,
+): [PromptEntry, PromptEntry] | null {
+  if (sources.length !== 1 || targets?.length !== 1) {
+    return null;
+  }
+  const sourceEntry = sources[0];
+  const targetEntry = targets[0];
+  return isConfidentCompareMatch(sourceEntry, targetEntry) ? [sourceEntry, targetEntry] : null;
+}
+
+function isConfidentCompareMatch(sourceEntry: PromptEntry, targetEntry: PromptEntry): boolean {
+  const sourceContent = normalizeCompareConfidenceContent(sourceEntry.content);
+  const targetContent = normalizeCompareConfidenceContent(targetEntry.content);
+  if (sourceContent === targetContent) {
+    return true;
+  }
+  if (!sourceContent || !targetContent) {
+    return false;
+  }
+
+  const sourceBigrams = getUniqueCompareBigrams(sourceContent);
+  const targetBigrams = getUniqueCompareBigrams(targetContent);
+  let commonBigrams = 0;
+  for (const bigram of sourceBigrams) {
+    if (targetBigrams.has(bigram)) {
+      commonBigrams += 1;
+    }
+  }
+  if (!commonBigrams) {
+    return false;
+  }
+
+  const diceScore = (2 * commonBigrams) / (sourceBigrams.size + targetBigrams.size);
+  return diceScore >= COMPARE_MATCH_DICE_THRESHOLD;
+}
+
+function normalizeCompareConfidenceContent(content: string): string {
+  return normalizeCompareContent(content)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function getUniqueCompareBigrams(content: string): Set<string> {
+  const characters = Array.from(content);
+  const bigrams = new Set<string>();
+  for (let index = 0; index < characters.length - 1; index += 1) {
+    bigrams.add(`${characters[index]}${characters[index + 1]}`);
+  }
+  return bigrams;
 }
 
 function summarizeComparePairs(pairs: PromptComparePair[]): PromptCompareResult['summary'] {
