@@ -1546,8 +1546,8 @@ function renderCompareDetail(selection: DetailSelection | null, pair: PromptComp
         <div class="pm-compare-detail-status">${renderCompareDetailBadges(pair)}</div>
       </div>
       <div class="pm-compare-columns">
-        ${renderCompareContentPane('source', sourceEntry, sourceLength)}
-        ${renderCompareContentPane('target', targetEntry, targetLength)}
+        ${renderCompareContentPane('source', sourceEntry, sourceLength, pair)}
+        ${renderCompareContentPane('target', targetEntry, targetLength, pair)}
       </div>
     </section>
   `;
@@ -1588,11 +1588,13 @@ function renderCompareContentPane(
   side: 'source' | 'target',
   entry: PromptEntry | undefined,
   contentLength: number,
+  pair: PromptComparePair | null,
 ): string {
   const label = side === 'source' ? '来源' : '目标';
   const role = entry?.role ?? '-';
   const enabled = entry ? (entry.enabled ? '启用' : '禁用') : '-';
   const name = entry?.name ?? `此侧无匹配条目`;
+  const contentName = `compare${side === 'source' ? 'Source' : 'Target'}Content`;
 
   return `
     <div class="pm-compare-pane" data-compare-side="${side}">
@@ -1603,11 +1605,156 @@ function renderCompareContentPane(
       <div class="pm-compare-pane-title">${escapeHtml(name)}</div>
       ${
         entry
-          ? `<textarea class="pm-compare-text" name="compare${side === 'source' ? 'Source' : 'Target'}Content" readonly spellcheck="false" aria-label="${label}正文">${escapeHtml(entry.content)}</textarea>`
+          ? `<div class="pm-compare-text pm-compare-diff" data-compare-content="${contentName}" role="textbox" aria-readonly="true" aria-label="${label}正文">${renderCompareContent(side, entry, pair)}</div>`
           : '<div class="pm-compare-empty">无匹配条目</div>'
       }
     </div>
   `;
+}
+
+interface CompareTextSegment {
+  text: string;
+  changed: boolean;
+}
+
+function renderCompareContent(side: 'source' | 'target', entry: PromptEntry, pair: PromptComparePair | null): string {
+  if (
+    !pair ||
+    pair.status !== 'matched' ||
+    !pair.changedFields.includes('content') ||
+    !pair.sourceEntry ||
+    !pair.targetEntry
+  ) {
+    return escapeHtml(normalizeDisplayContent(entry.content));
+  }
+
+  const segments = diffCompareText(pair.sourceEntry.content, pair.targetEntry.content);
+  const sideSegments = side === 'source' ? segments.source : segments.target;
+  return sideSegments
+    .map(segment => {
+      const content = escapeHtml(segment.text);
+      return segment.changed ? `<mark class="pm-compare-token">${content}</mark>` : content;
+    })
+    .join('');
+}
+
+function diffCompareText(
+  sourceContent: string,
+  targetContent: string,
+): { source: CompareTextSegment[]; target: CompareTextSegment[] } {
+  const sourceTokens = tokenizeCompareText(normalizeDisplayContent(sourceContent));
+  const targetTokens = tokenizeCompareText(normalizeDisplayContent(targetContent));
+  if (!sourceTokens.length && !targetTokens.length) {
+    return { source: [], target: [] };
+  }
+
+  if (sourceTokens.length * targetTokens.length > 260_000) {
+    return diffCompareTextByEdges(sourceTokens, targetTokens);
+  }
+
+  const rows = sourceTokens.length + 1;
+  const columns = targetTokens.length + 1;
+  const table = new Uint16Array(rows * columns);
+  const cell = (row: number, column: number) => row * columns + column;
+
+  for (let sourceIndex = sourceTokens.length - 1; sourceIndex >= 0; sourceIndex -= 1) {
+    for (let targetIndex = targetTokens.length - 1; targetIndex >= 0; targetIndex -= 1) {
+      table[cell(sourceIndex, targetIndex)] =
+        sourceTokens[sourceIndex] === targetTokens[targetIndex]
+          ? table[cell(sourceIndex + 1, targetIndex + 1)] + 1
+          : Math.max(table[cell(sourceIndex + 1, targetIndex)], table[cell(sourceIndex, targetIndex + 1)]);
+    }
+  }
+
+  const sourceSegments: CompareTextSegment[] = [];
+  const targetSegments: CompareTextSegment[] = [];
+  let sourceIndex = 0;
+  let targetIndex = 0;
+
+  while (sourceIndex < sourceTokens.length || targetIndex < targetTokens.length) {
+    if (
+      sourceIndex < sourceTokens.length &&
+      targetIndex < targetTokens.length &&
+      sourceTokens[sourceIndex] === targetTokens[targetIndex]
+    ) {
+      pushCompareSegment(sourceSegments, sourceTokens[sourceIndex], false);
+      pushCompareSegment(targetSegments, targetTokens[targetIndex], false);
+      sourceIndex += 1;
+      targetIndex += 1;
+      continue;
+    }
+
+    if (
+      targetIndex >= targetTokens.length ||
+      (sourceIndex < sourceTokens.length &&
+        table[cell(sourceIndex + 1, targetIndex)] >= table[cell(sourceIndex, targetIndex + 1)])
+    ) {
+      pushCompareSegment(sourceSegments, sourceTokens[sourceIndex], true);
+      sourceIndex += 1;
+      continue;
+    }
+
+    pushCompareSegment(targetSegments, targetTokens[targetIndex], true);
+    targetIndex += 1;
+  }
+
+  return { source: sourceSegments, target: targetSegments };
+}
+
+function diffCompareTextByEdges(
+  sourceTokens: string[],
+  targetTokens: string[],
+): { source: CompareTextSegment[]; target: CompareTextSegment[] } {
+  let prefixLength = 0;
+  while (
+    prefixLength < sourceTokens.length &&
+    prefixLength < targetTokens.length &&
+    sourceTokens[prefixLength] === targetTokens[prefixLength]
+  ) {
+    prefixLength += 1;
+  }
+
+  let suffixLength = 0;
+  while (
+    suffixLength < sourceTokens.length - prefixLength &&
+    suffixLength < targetTokens.length - prefixLength &&
+    sourceTokens[sourceTokens.length - 1 - suffixLength] === targetTokens[targetTokens.length - 1 - suffixLength]
+  ) {
+    suffixLength += 1;
+  }
+
+  const sourceSegments = tokensToSegments(sourceTokens, prefixLength, suffixLength);
+  const targetSegments = tokensToSegments(targetTokens, prefixLength, suffixLength);
+  return { source: sourceSegments, target: targetSegments };
+}
+
+function tokensToSegments(tokens: string[], prefixLength: number, suffixLength: number): CompareTextSegment[] {
+  const segments: CompareTextSegment[] = [];
+  tokens.forEach((token, index) => {
+    pushCompareSegment(segments, token, index >= prefixLength && index < tokens.length - suffixLength);
+  });
+  return segments;
+}
+
+function tokenizeCompareText(content: string): string[] {
+  const tokens = content.match(/\s+|[A-Za-z0-9_]+|[\u3400-\u9fff]+|[^\sA-Za-z0-9_\u3400-\u9fff]/gu);
+  return tokens ?? [];
+}
+
+function pushCompareSegment(segments: CompareTextSegment[], text: string | undefined, changed: boolean): void {
+  if (!text) {
+    return;
+  }
+  const last = segments[segments.length - 1];
+  if (last?.changed === changed) {
+    last.text += text;
+    return;
+  }
+  segments.push({ text, changed });
+}
+
+function normalizeDisplayContent(content: string): string {
+  return content.replace(/\r\n?/g, '\n');
 }
 
 function renderRoleOptions(active: string): string {

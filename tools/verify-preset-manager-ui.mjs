@@ -43,7 +43,12 @@ const fixturePresets = [
         { identifier: 'source-novel', name: '📔小说', role: 'system', content: '基调：叙事性小说\n特化：保持真实感。' },
         { identifier: 'source-light', name: '📕轻小说', role: 'system', content: '基调：日式轻文学\n人称：第一人称。' },
         { identifier: 'shared-same', name: '共同正文相同', role: 'system', content: '共同第一行\n共同第二行' },
-        { identifier: 'shared-diff', name: '共同正文不同', role: 'system', content: '来源第一行\n来源第二行' },
+        {
+          identifier: 'shared-diff',
+          name: '共同正文不同',
+          role: 'system',
+          content: '共同第一行 {{random::红玫瑰::蓝月亮}}\n共同第二行',
+        },
         { identifier: 'shared-meta', name: '来源标题不同', role: 'system', content: '辅助差异正文相同' },
         { identifier: 'source-name-match', name: '唯一同名条目', role: 'system', content: '来源同名正文' },
         { identifier: 'source-only-entry', name: '仅来源条目', role: 'user', content: '只在来源出现' },
@@ -80,7 +85,12 @@ const fixturePresets = [
           content: '{{setvar::writingstyle::writing_style_1}}',
         },
         { identifier: 'shared-same', name: '共同正文相同', role: 'system', content: '共同第一行\n共同第二行' },
-        { identifier: 'shared-diff', name: '共同正文不同', role: 'system', content: '目标第一行\n目标第二行' },
+        {
+          identifier: 'shared-diff',
+          name: '共同正文不同',
+          role: 'system',
+          content: '共同第一行 {{random::红玫瑰}}\n共同第二行',
+        },
         { identifier: 'shared-meta', name: '目标标题不同', role: 'user', content: '辅助差异正文相同' },
         { identifier: 'target-name-match', name: '唯一同名条目', role: 'system', content: '目标同名正文' },
         { identifier: 'target-only-entry', name: '仅目标条目', role: 'assistant', content: '只在目标出现' },
@@ -223,7 +233,7 @@ function serveFixture() {
         enabled: true,
         name: '预设管理',
         id: 'preset-manager-script-id',
-        content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v2.00/dist/preset-manager/index.js';",
+        content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v2.10/dist/preset-manager/index.js';",
         info: '',
         button: { enabled: true, buttons: [] },
         data: {},
@@ -236,13 +246,13 @@ function serveFixture() {
     window.fetch = (input, init) => {
       const href = String(input);
       if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/releases/latest') {
-        return Promise.resolve(new Response(JSON.stringify({ tag_name: 'v2.00' }), {
+        return Promise.resolve(new Response(JSON.stringify({ tag_name: 'v2.10' }), {
           status: 200,
           headers: { 'content-type': 'application/json; charset=utf-8' },
         }));
       }
       if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/tags?per_page=20') {
-        return Promise.resolve(new Response(JSON.stringify([{ name: 'v2.00' }, { name: 'v1.32' }, { name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }] ), {
+        return Promise.resolve(new Response(JSON.stringify([{ name: 'v2.10' }, { name: 'v2.00' }, { name: 'v1.32' }, { name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }] ), {
           status: 200,
           headers: { 'content-type': 'application/json; charset=utf-8' },
         }));
@@ -445,7 +455,7 @@ function serveFixture() {
           enabled: true,
           name: '预设管理',
           id: 'zero-frame-script-id',
-          content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v2.00/dist/preset-manager/index.js';",
+          content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v2.10/dist/preset-manager/index.js';",
           info: '',
           button: { enabled: true, buttons: [] },
           data: {},
@@ -458,13 +468,13 @@ function serveFixture() {
       child.fetch = (input, init) => {
         const href = String(input);
         if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/releases/latest') {
-          return Promise.resolve(new child.Response(JSON.stringify({ tag_name: 'v2.00' }), {
+          return Promise.resolve(new child.Response(JSON.stringify({ tag_name: 'v2.10' }), {
             status: 200,
             headers: { 'content-type': 'application/json; charset=utf-8' },
           }));
         }
         if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/tags?per_page=20') {
-          return Promise.resolve(new child.Response(JSON.stringify([{ name: 'v2.00' }, { name: 'v1.32' }, { name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }] ), {
+          return Promise.resolve(new child.Response(JSON.stringify([{ name: 'v2.10' }, { name: 'v2.00' }, { name: 'v1.32' }, { name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }] ), {
             status: 200,
             headers: { 'content-type': 'application/json; charset=utf-8' },
           }));
@@ -998,15 +1008,23 @@ async function verifyCompareMode(page, fixture, viewportName) {
   if (!detailText.includes('正文不同')) {
     throw new Error(`${viewportName}: 比对详情缺少正文不同状态`);
   }
-  const sourceCompareText = page.locator('textarea[name="compareSourceContent"]');
-  const targetCompareText = page.locator('textarea[name="compareTargetContent"]');
+  const sourceCompareText = page.locator('[data-compare-content="compareSourceContent"]');
+  const targetCompareText = page.locator('[data-compare-content="compareTargetContent"]');
   if (
-    !(await sourceCompareText.inputValue()).includes('来源第一行') ||
-    !(await targetCompareText.inputValue()).includes('目标第一行') ||
-    (await sourceCompareText.getAttribute('readonly')) === null ||
-    (await targetCompareText.getAttribute('readonly')) === null
+    !(await sourceCompareText.innerText()).includes('共同第一行') ||
+    !(await targetCompareText.innerText()).includes('共同第一行') ||
+    (await sourceCompareText.getAttribute('aria-readonly')) !== 'true' ||
+    (await targetCompareText.getAttribute('aria-readonly')) !== 'true'
   ) {
-    throw new Error(`${viewportName}: 比对详情没有使用清晰的只读双文本框`);
+    throw new Error(`${viewportName}: 比对详情没有使用清晰的只读正文视图`);
+  }
+  const sourceDiffMarks = await sourceCompareText.locator('.pm-compare-token').allInnerTexts();
+  const targetDiffMarks = await targetCompareText.locator('.pm-compare-token').allInnerTexts();
+  if (!sourceDiffMarks.join('').includes('蓝月亮') && !targetDiffMarks.join('').includes('蓝月亮')) {
+    throw new Error(`${viewportName}: 比对详情没有高亮 prompt 内部差异片段`);
+  }
+  if (await page.locator('textarea[name="compareSourceContent"], textarea[name="compareTargetContent"]').count()) {
+    throw new Error(`${viewportName}: 比对模式详情不应退回不可高亮的 textarea`);
   }
   if (await page.locator('textarea[name="detailContent"]').count()) {
     throw new Error(`${viewportName}: 比对模式详情不应提供可编辑正文框`);
@@ -1370,7 +1388,7 @@ try {
       throw new Error(`${viewport.name}: 出现了应移除的旧文案`);
     }
     const versionText = await page.locator('.pm-version-chip').textContent();
-    if (versionText?.trim() !== 'v2.00') {
+    if (versionText?.trim() !== 'v2.10') {
       throw new Error(`${viewport.name}: 标题旁没有显示当前版本号`);
     }
 
@@ -1399,7 +1417,7 @@ try {
     if (viewport.name === 'desktop-wide') {
       await page.locator('.pm-version-button').click();
       await page.locator('.pm-version-box').waitFor({ state: 'visible' });
-      await page.waitForFunction(() => document.body.innerText.includes('v2.00'));
+      await page.waitForFunction(() => document.body.innerText.includes('v2.10'));
       if (await page.locator('.pm-version-row[data-version="v0.99"]').count()) {
         throw new Error(`${viewport.name}: 版本列表不应显示 v1.0.0 以前的版本`);
       }

@@ -694,7 +694,7 @@
   flex: 1 1 auto;
   width: 100%;
   min-height: 0;
-  resize: none;
+  overflow: auto;
   padding: 9px 10px;
   color: var(--pm-text);
   background: color-mix(in srgb, var(--pm-surface-strong) 82%, transparent);
@@ -705,6 +705,19 @@
   font-size: 0.78rem;
   line-height: 1.5;
   white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.pm-compare-token {
+  display: inline;
+  padding: 0 2px;
+  color: color-mix(in srgb, var(--pm-warning) 42%, var(--pm-text) 58%);
+  background: color-mix(in srgb, var(--pm-warning) 24%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pm-warning) 48%, transparent);
+  border-radius: 4px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 .pm-compare-empty {
