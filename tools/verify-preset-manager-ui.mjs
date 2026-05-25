@@ -159,12 +159,22 @@ fixturePresets[1].preset.prompt_order[0].order.push({ identifier: 'deep-shared-m
 
 function renderPresetManagerFixtureHostScript() {
   const fixtureJson = JSON.stringify(fixturePresets).replaceAll('</script', '<\\/script');
-  const versionTagsJson = JSON.stringify(['v2.20', 'v2.12', 'v2.11', 'v2.00', 'v1.32', 'v1.31', 'v1.30', 'v1.19']);
+  const versionTagsJson = JSON.stringify([
+    'v2.21',
+    'v2.20',
+    'v2.12',
+    'v2.11',
+    'v2.00',
+    'v1.32',
+    'v1.31',
+    'v1.30',
+    'v1.19',
+  ]);
 
   return `
     const presetManagerFixturePresets = ${fixtureJson};
     const presetManagerVersionTags = ${versionTagsJson};
-    const presetManagerImportContent = "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v2.20/dist/preset-manager/index.js';";
+    const presetManagerImportContent = "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v2.21/dist/preset-manager/index.js';";
     const clonePreset = value => JSON.parse(JSON.stringify(value));
     const makeRuntimePreset = data => {
       const cloned = clonePreset(data);
@@ -246,7 +256,7 @@ function renderPresetManagerFixtureHostScript() {
       host.fetch = (input, init) => {
         const href = String(input);
         if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/releases/latest') {
-          return Promise.resolve(new host.Response(JSON.stringify({ tag_name: 'v2.20' }), {
+          return Promise.resolve(new host.Response(JSON.stringify({ tag_name: 'v2.21' }), {
             status: 200,
             headers: { 'content-type': 'application/json; charset=utf-8' },
           }));
@@ -1523,7 +1533,7 @@ try {
       throw new Error(`${viewport.name}: 顶部刷新按钮应该已删除`);
     }
     const versionText = await page.locator('.pm-version-chip').textContent();
-    if (versionText?.trim() !== 'v2.20') {
+    if (versionText?.trim() !== 'v2.21') {
       throw new Error(`${viewport.name}: 标题旁没有显示当前版本号`);
     }
 
@@ -1553,7 +1563,7 @@ try {
       await verifyTutorial(page, fixture, viewport.name);
       await page.locator('.pm-version-button').click();
       await page.locator('.pm-version-box').waitFor({ state: 'visible' });
-      await page.waitForFunction(() => document.body.innerText.includes('v2.20'));
+      await page.waitForFunction(() => document.body.innerText.includes('v2.21'));
       if (await page.locator('.pm-version-row[data-version="v0.99"]').count()) {
         throw new Error(`${viewport.name}: 版本列表不应显示 v1.0.0 以前的版本`);
       }

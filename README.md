@@ -11,7 +11,7 @@
 入口使用酒馆助手脚本自带的“预设管理”按钮，不会在页面右下角额外创建浮动按钮：
 
 ```javascript
-import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v2.20/dist/preset-manager/index.js';
+import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v2.21/dist/preset-manager/index.js';
 ```
 
 本地开发时可以运行：
