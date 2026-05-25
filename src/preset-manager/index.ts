@@ -1,4 +1,5 @@
 import './styles.css';
+import { createPresetManagerTutorial } from './tutorial';
 import {
   APP_VERSION,
   compareVersionTags,
@@ -54,9 +55,13 @@ const DEBUG_ENTRY_LIMIT = 80;
 const BUTTON_REGISTRATION_RETRY_LIMIT = 20;
 const BUTTON_REGISTRATION_RETRY_DELAY_MS = 250;
 const OPEN_REQUEST_DEBOUNCE_MS = 250;
+const COMPARE_TEXT_RENDER_DEBOUNCE_MS = 220;
 const FAVORITES_PRESET_VALUE = '__preset-manager-favorites__';
 const FAVORITES_PRESET_LABEL = '收藏夹';
 const VERSION_PREFERENCE_KEY = 'version-import-source';
+const presetManagerTutorial = createPresetManagerTutorial({
+  root: () => getMountDocument().getElementById(ROOT_ID) ?? getMountDocument(),
+});
 
 type MobileTab = 'source' | 'target' | 'preview';
 type EntryKind = 'source' | 'target' | 'favorite';
@@ -223,6 +228,9 @@ let hostRoot: HTMLElement | null = null;
 let mountDocument: Document | null = null;
 let isHelperButtonClickFallbackBound = false;
 let lastOpenRequestAt = 0;
+let pendingScrollSelectedRowIntoView = false;
+let compareTextRenderTimer: number | null = null;
+const compareContentScrollMemory = new Map<string, Pick<RenderScrollSnapshot, 'top' | 'left'>>();
 let debugEntries: DebugEntry[] = [];
 
 diagnose('module-evaluated', getRuntimeDiagnostics());
@@ -290,6 +298,7 @@ function registerManagerEntry(): void {
 
 function cleanupManagerEntry(): void {
   diagnose('cleanup');
+  presetManagerTutorial.close();
   buttonEventHandle?.stop();
   buttonEventHandle = null;
   styleHandle?.destroy();
@@ -686,6 +695,7 @@ function render(): void {
     root.addEventListener('input', onRootInput);
     root.addEventListener('compositionstart', onCompositionStart);
     root.addEventListener('compositionend', onCompositionEnd);
+    root.addEventListener('scroll', onRootScroll, true);
     root.addEventListener('dragstart', onDragStart);
     root.addEventListener('dragover', onDragOver);
     root.addEventListener('drop', onDrop);
@@ -699,6 +709,10 @@ function render(): void {
 
   applyMobileSurfaces(root);
   restoreScrollSnapshot(root, scrollSnapshot);
+  if (pendingScrollSelectedRowIntoView) {
+    pendingScrollSelectedRowIntoView = false;
+    requestSelectedRowsIntoView(root);
+  }
   diagnoseRootLayout(root, existing ? 'render-updated' : 'render-mounted');
 }
 
@@ -857,29 +871,74 @@ function captureScrollSnapshot(root: HTMLElement | null): RenderScrollSnapshot[]
     return [];
   }
 
-  return [...root.querySelectorAll<HTMLElement>('.pm-body, .pm-list[data-drop-zone]')]
-    .map(element => ({
-      key: getScrollKey(element),
-      top: element.scrollTop,
-      left: element.scrollLeft,
-    }))
+  return [...root.querySelectorAll<HTMLElement>('.pm-body, .pm-list[data-drop-zone], .pm-compare-content-input')]
+    .map(element => {
+      if (isCompareContentEditor(element)) {
+        rememberCompareContentScroll(element);
+      }
+      return {
+        key: getScrollKey(element),
+        top: element.scrollTop,
+        left: element.scrollLeft,
+      };
+    })
     .filter((item): item is RenderScrollSnapshot => Boolean(item.key));
 }
 
 function restoreScrollSnapshot(root: HTMLElement, snapshot: RenderScrollSnapshot[]): void {
+  const restoredKeys = new Set<string>();
   for (const item of snapshot) {
     const element = findScrollElement(root, item.key);
     if (!element) {
       continue;
     }
+    restoredKeys.add(item.key);
     element.scrollTop = item.top;
     element.scrollLeft = item.left;
+    if (isCompareContentEditor(element)) {
+      rememberCompareContentScroll(element);
+    }
   }
+  restoreRememberedCompareContentScroll(root, restoredKeys);
+}
+
+function requestScrollSelectedRowOnNextRender(): void {
+  pendingScrollSelectedRowIntoView = true;
+}
+
+function requestSelectedRowsIntoView(root: HTMLElement): void {
+  const targetWindow = root.ownerDocument.defaultView ?? window;
+  targetWindow.requestAnimationFrame(() => {
+    const rows = getSelectedRowElements(root);
+    for (const row of rows) {
+      row.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  });
+}
+
+function getSelectedRowElements(root: HTMLElement): HTMLElement[] {
+  const rows: HTMLElement[] = [];
+  if (state.selectedSourceId) {
+    const sourceRow = root.querySelector<HTMLElement>(
+      `.pm-row[data-entry-kind="source"][data-id="${CSS.escape(state.selectedSourceId)}"]`,
+    );
+    if (sourceRow) rows.push(sourceRow);
+  }
+  if (state.selectedTargetId) {
+    const targetRow = root.querySelector<HTMLElement>(
+      `.pm-row[data-entry-kind="target"][data-id="${CSS.escape(state.selectedTargetId)}"]`,
+    );
+    if (targetRow) rows.push(targetRow);
+  }
+  return rows;
 }
 
 function getScrollKey(element: HTMLElement): string {
   if (element.classList.contains('pm-body')) {
     return 'body';
+  }
+  if (isCompareContentEditor(element)) {
+    return getCompareContentScrollKey(element);
   }
   const dropZone = element.dataset.dropZone;
   return dropZone ? `drop:${dropZone}` : '';
@@ -898,7 +957,71 @@ function findScrollElement(root: HTMLElement, key: string): HTMLElement | null {
   if (key === 'drop:favorite') {
     return root.querySelector<HTMLElement>('.pm-list[data-drop-zone="favorite"]');
   }
+  if (key === 'compare:source') {
+    return root.querySelector<HTMLElement>('[data-compare-content="compareSourceContent"]');
+  }
+  if (key === 'compare:target') {
+    return root.querySelector<HTMLElement>('[data-compare-content="compareTargetContent"]');
+  }
+  if (key.startsWith('compare:source:')) {
+    const id = key.slice('compare:source:'.length);
+    return (
+      root.querySelector<HTMLElement>(
+        `[data-compare-content="compareSourceContent"][data-entry-id="${CSS.escape(id)}"]`,
+      ) ?? root.querySelector<HTMLElement>('[data-compare-content="compareSourceContent"]')
+    );
+  }
+  if (key.startsWith('compare:target:')) {
+    const id = key.slice('compare:target:'.length);
+    return (
+      root.querySelector<HTMLElement>(
+        `[data-compare-content="compareTargetContent"][data-entry-id="${CSS.escape(id)}"]`,
+      ) ?? root.querySelector<HTMLElement>('[data-compare-content="compareTargetContent"]')
+    );
+  }
   return null;
+}
+
+function isCompareContentEditor(element: HTMLElement): boolean {
+  return (
+    element.classList.contains('pm-compare-content-input') && isCompareContentName(element.dataset.compareContent ?? '')
+  );
+}
+
+function isCompareContentName(name: string): boolean {
+  return name === 'compareSourceContent' || name === 'compareTargetContent';
+}
+
+function getCompareContentScrollKey(element: HTMLElement): string {
+  const side = element.dataset.compareContent === 'compareSourceContent' ? 'source' : 'target';
+  const id = element.dataset.entryId ?? '';
+  return id ? `compare:${side}:${id}` : `compare:${side}`;
+}
+
+function rememberCompareContentScroll(element: HTMLElement): void {
+  compareContentScrollMemory.set(getCompareContentScrollKey(element), {
+    top: element.scrollTop,
+    left: element.scrollLeft,
+  });
+}
+
+function restoreRememberedCompareContentScroll(root: HTMLElement, restoredKeys: Set<string>): void {
+  root.querySelectorAll<HTMLElement>('.pm-compare-content-input').forEach(element => {
+    if (!isCompareContentEditor(element)) {
+      return;
+    }
+    const key = getCompareContentScrollKey(element);
+    if (restoredKeys.has(key)) {
+      return;
+    }
+    const remembered = compareContentScrollMemory.get(key);
+    if (!remembered) {
+      return;
+    }
+    element.scrollTop = remembered.top;
+    element.scrollLeft = remembered.left;
+    rememberCompareContentScroll(element);
+  });
 }
 
 function applyMobileSurfaces(root: HTMLElement): void {
@@ -920,13 +1043,13 @@ function renderDialog(): string {
 
   return `
     <div class="pm-backdrop" data-action="backdrop-close"></div>
-    <section class="pm-panel" role="dialog" aria-modal="true" aria-label="${APP_NAME}" data-active-tab="${state.activeTab}" data-compare-mode="${state.compareMode ? 'true' : 'false'}">
+    <section class="pm-panel" role="dialog" aria-modal="true" aria-label="${APP_NAME}" data-active-tab="${state.activeTab}" data-compare-mode="${state.compareMode ? 'true' : 'false'}" data-pm-tutorial="panel">
       <header class="pm-header">
         <div class="pm-title-block">
           <div class="pm-title-line">
             <div class="pm-title">${APP_NAME}</div>
             <span class="pm-version-chip">${APP_VERSION}</span>
-            <button class="pm-version-button ${getVersionButtonClass()}" type="button" data-action="open-version-manager" title="${escapeAttr(getVersionButtonTitle())}" aria-label="${escapeAttr(getVersionButtonTitle())}">
+            <button class="pm-version-button ${getVersionButtonClass()}" type="button" data-action="open-version-manager" data-pm-tutorial="version-manager" title="${escapeAttr(getVersionButtonTitle())}" aria-label="${escapeAttr(getVersionButtonTitle())}">
               <i class="fa-solid ${getVersionButtonIcon()}" aria-hidden="true"></i>
               ${isVersionUpdateAvailable() ? '<span class="pm-update-dot" aria-hidden="true"></span>' : ''}
             </button>
@@ -934,7 +1057,7 @@ function renderDialog(): string {
           <div class="pm-subtitle">${escapeHtml(getStatusText(sourceEntries.length, targetEntries.length))}</div>
         </div>
         <div class="pm-header-actions">
-          <button class="pm-icon-button" type="button" data-action="refresh" title="刷新预设"><i class="fa-solid fa-rotate" aria-hidden="true"></i></button>
+          <button class="pm-icon-button" type="button" data-action="start-tutorial" title="打开教程" aria-label="打开教程"><i class="fa-solid fa-circle-question" aria-hidden="true"></i></button>
           <button class="pm-icon-button" type="button" data-action="close" title="关闭"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
         </div>
       </header>
@@ -953,15 +1076,15 @@ function renderDialog(): string {
         ${renderDetail(selected, comparison)}
       </main>
 
-      <footer class="pm-footer">
+      <footer class="pm-footer" data-pm-tutorial="save-bar">
         <div class="pm-footer-status">
           ${state.dirty ? '<span class="pm-dot pm-dot-dirty"></span>有未保存的修改' : '<span class="pm-dot"></span>暂无未保存修改'}
-          ${state.compareMode ? '<span class="pm-validation">比对模式只读</span>' : ''}
+          ${state.compareMode ? '<span class="pm-validation">比对模式可编辑当前条目</span>' : ''}
           ${validation && !validation.ok ? `<span class="pm-validation">结构警告 ${validation.duplicateIdentifiers.length + validation.missingOrderReferences.length + validation.promptsWithoutIdentifiers}</span>` : ''}
         </div>
         <div class="pm-footer-actions">
-          <button class="pm-button" type="button" data-action="reset-draft" ${state.dirty && !state.compareMode ? '' : 'disabled'}>放弃修改</button>
-          <button class="pm-button pm-button-primary" type="button" data-action="save" ${state.dirty && !state.saving && !state.compareMode ? '' : 'disabled'}>
+          <button class="pm-button" type="button" data-action="reset-draft" ${state.dirty ? '' : 'disabled'}>放弃修改</button>
+          <button class="pm-button pm-button-primary" type="button" data-action="save" ${state.dirty && !state.saving ? '' : 'disabled'}>
             <i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>
             ${state.saving ? '保存中' : '保存预设'}
           </button>
@@ -1132,7 +1255,7 @@ function renderCompareBar(comparison: PromptCompareResult | null): string {
   const pressed = state.compareMode ? 'true' : 'false';
   const summary = comparison?.summary;
   return `
-    <div class="pm-compare-bar">
+    <div class="pm-compare-bar" data-pm-tutorial="compare-bar">
       <button class="pm-selection-mode-button pm-compare-toggle" type="button" data-action="toggle-compare" aria-pressed="${pressed}" title="开启后只高亮来源和目标预设的条目正文差异">
         <i class="fa-solid fa-code-compare" aria-hidden="true"></i>
         <span>比对模式</span>
@@ -1193,7 +1316,7 @@ function renderPresetPane(
   const action = isSource ? 'select-source' : 'select-target';
 
   return `
-    <section class="pm-pane pm-pane-${kind}" data-pane="${kind}">
+    <section class="pm-pane pm-pane-${kind}" data-pane="${kind}" data-pm-tutorial="${kind}-pane">
       <div class="pm-pane-head">
         <div class="pm-pane-title">
           <h2>${title}</h2>
@@ -1343,7 +1466,7 @@ function renderEntryRow(
   const draggable = state.compareMode ? 'false' : 'true';
 
   return `
-    <div class="pm-row ${selected} ${multiClass} ${multiSelectedClass} ${compareClass}" role="button" tabindex="0" data-entry-kind="${kind}" data-id="${escapeAttr(entry.id)}" data-index="${index}" draggable="${draggable}">
+    <div class="pm-row ${selected} ${multiClass} ${multiSelectedClass} ${compareClass}" role="button" tabindex="0" data-entry-kind="${kind}" data-id="${escapeAttr(entry.id)}" data-index="${index}" data-pm-tutorial="entry-row" draggable="${draggable}">
       <div class="pm-row-grip" data-drag-handle="true" aria-hidden="true" title="拖拽条目"><i class="fa-solid fa-grip-lines"></i></div>
       ${multiSelectEnabled ? renderEntrySelectionButton(kind, entry, multiSelected) : ''}
       <div class="pm-row-main">
@@ -1356,7 +1479,7 @@ function renderEntryRow(
         </div>
       </div>
       ${renderRowToggle(kind, entry)}
-      <div class="pm-row-actions">${actions}</div>
+      <div class="pm-row-actions" data-pm-tutorial="entry-actions">${actions}</div>
     </div>
   `;
 }
@@ -1452,13 +1575,11 @@ function passesCompareFilter(pair: PromptComparePair | null, kind: 'source' | 't
 
 function renderRowToggle(kind: 'source' | 'target', entry: PromptEntry): string {
   const nextState = entry.enabled ? '禁用' : '启用';
-  const title = state.compareMode
-    ? `当前${entry.enabled ? '启用' : '禁用'}，比对模式下不可修改`
-    : `当前${entry.enabled ? '启用' : '禁用'}，点击暂存为${nextState}，底部保存后生效`;
+  const title = `当前${entry.enabled ? '启用' : '禁用'}，点击暂存为${nextState}，底部保存后生效`;
   const icon = entry.enabled ? 'fa-toggle-on' : 'fa-toggle-off';
 
   return `
-    <button class="pm-row-toggle" type="button" data-action="entry-toggle-enabled" data-entry-kind="${kind}" data-id="${escapeAttr(entry.id)}" aria-pressed="${entry.enabled ? 'true' : 'false'}" title="${title}" aria-label="${title}" ${state.compareMode ? 'disabled' : ''}>
+    <button class="pm-row-toggle" type="button" data-action="entry-toggle-enabled" data-entry-kind="${kind}" data-id="${escapeAttr(entry.id)}" data-pm-tutorial="entry-toggle" aria-pressed="${entry.enabled ? 'true' : 'false'}" title="${title}" aria-label="${title}">
       <i class="fa-solid ${icon}" aria-hidden="true"></i>
     </button>
   `;
@@ -1509,7 +1630,7 @@ function renderDetail(selection: DetailSelection | null, comparison: PromptCompa
   const role = entry?.role ?? 'system';
 
   return `
-    <section class="pm-detail-pane" data-pane="preview">
+    <section class="pm-detail-pane" data-pane="preview" data-pm-tutorial="detail-pane">
       <div class="pm-pane-head">
         <h2>条目详情</h2>
         <span class="pm-count">${content.length} 字</span>
@@ -1536,7 +1657,7 @@ function renderCompareDetail(selection: DetailSelection | null, pair: PromptComp
   const targetLength = targetEntry?.content.length ?? 0;
 
   return `
-    <section class="pm-detail-pane pm-compare-detail" data-pane="preview">
+    <section class="pm-detail-pane pm-compare-detail" data-pane="preview" data-pm-tutorial="detail-pane">
       <div class="pm-pane-head">
         <h2>条目详情</h2>
         <span class="pm-count">比对</span>
@@ -1595,17 +1716,33 @@ function renderCompareContentPane(
   const enabled = entry ? (entry.enabled ? '启用' : '禁用') : '-';
   const name = entry?.name ?? `此侧无匹配条目`;
   const contentName = `compare${side === 'source' ? 'Source' : 'Target'}Content`;
+  const roleName = `compare${side === 'source' ? 'Source' : 'Target'}Role`;
+  const editable = side === 'source' ? Boolean(entry && getEditableSourceDraft()) : Boolean(entry && state.targetDraft);
 
   return `
     <div class="pm-compare-pane" data-compare-side="${side}">
       <div class="pm-compare-pane-head">
         <strong>${label}</strong>
-        <span>${escapeHtml(role)} · ${enabled} · ${contentLength} 字</span>
+        <span>${enabled} · ${contentLength} 字</span>
       </div>
-      <div class="pm-compare-pane-title">${escapeHtml(name)}</div>
+      <div class="pm-compare-pane-title-row">
+        <div class="pm-compare-pane-title">${escapeHtml(name)}</div>
+        ${
+          entry
+            ? `<label class="pm-compare-role-field">
+          <span>角色</span>
+          <select name="${roleName}" data-entry-kind="${side}" data-entry-id="${escapeAttr(entry.id)}" ${editable ? '' : 'disabled'}>
+            ${renderRoleOptions(role)}
+          </select>
+        </label>`
+            : ''
+        }
+      </div>
       ${
         entry
-          ? `<div class="pm-compare-text pm-compare-diff" data-compare-content="${contentName}" role="textbox" aria-readonly="true" aria-label="${label}正文">${renderCompareContent(side, entry, pair)}</div>`
+          ? `<div class="pm-compare-editor" data-compare-editor="${contentName}">
+          <div class="pm-compare-text pm-compare-content-input" data-compare-content="${contentName}" data-entry-kind="${side}" data-entry-id="${escapeAttr(entry.id)}" data-compare-editable="${editable ? 'true' : 'false'}" data-compare-highlight="${contentName}" role="textbox" aria-multiline="true" aria-readonly="${editable ? 'false' : 'true'}" aria-label="${label}正文" contenteditable="${editable ? 'true' : 'false'}" spellcheck="false">${renderCompareContent(side, entry, pair)}</div>
+        </div>`
           : '<div class="pm-compare-empty">无匹配条目</div>'
       }
     </div>
@@ -1929,8 +2066,11 @@ function toggleCompareMode(): void {
   if (state.compareMode) {
     setMultiSelectEnabled('source', false);
     setMultiSelectEnabled('target', false);
-    state.selectedSourceId = '';
-    state.selectedTargetId = '';
+    const selectedKind = state.selectedTargetId ? 'target' : state.selectedSourceId ? 'source' : null;
+    const selectedId = selectedKind === 'target' ? state.selectedTargetId : state.selectedSourceId;
+    if (selectedKind && selectedId) {
+      selectCompareEntryById(selectedKind, selectedId);
+    }
     pointerDrag = null;
     clearDropMarkers();
     state.notice = '已开启比对模式';
@@ -1938,6 +2078,7 @@ function toggleCompareMode(): void {
     state.compareFilter = 'all';
     state.notice = '已关闭比对模式';
   }
+  requestScrollSelectedRowOnNextRender();
   render();
 }
 
@@ -1947,8 +2088,7 @@ function setCompareFilter(filter: string | undefined): void {
   }
   state.compareMode = true;
   state.compareFilter = state.compareFilter === filter ? 'all' : filter;
-  state.selectedSourceId = '';
-  state.selectedTargetId = '';
+  requestScrollSelectedRowOnNextRender();
   render();
 }
 
@@ -2144,6 +2284,14 @@ function onRootChange(event: Event): void {
     updateDetailRole(target.value);
   }
 
+  if (target.name === 'compareSourceRole') {
+    updateComparePaneRole('source', target.dataset.entryId ?? '', target.value);
+  }
+
+  if (target.name === 'compareTargetRole') {
+    updateComparePaneRole('target', target.dataset.entryId ?? '', target.value);
+  }
+
   if (target.name === 'versionImportSource') {
     updateVersionImportSource(target.value);
   }
@@ -2152,6 +2300,16 @@ function onRootChange(event: Event): void {
 }
 
 function onRootInput(event: Event): void {
+  const compareEditor = getCompareContentEditor(event.target);
+  if (compareEditor) {
+    updateCompareEditorState(compareEditor);
+    if (isComposingInput || ('isComposing' in event && Boolean((event as InputEvent).isComposing))) {
+      return;
+    }
+    scheduleCompareTextRender(compareEditor);
+    return;
+  }
+
   const target = toInputElement(event.target) ?? toTextAreaElement(event.target);
   if (!target) {
     return;
@@ -2163,10 +2321,27 @@ function onRootInput(event: Event): void {
     return;
   }
 
+  if (isCompareContentControl(target)) {
+    scheduleCompareTextRender(target);
+    return;
+  }
+
   renderPreservingTextControl(target);
 }
 
+function onRootScroll(event: Event): void {
+  const target = toElement(event.target);
+  if (target && isCompareContentEditor(target as HTMLElement)) {
+    rememberCompareContentScroll(target as HTMLElement);
+  }
+}
+
 function onCompositionStart(event: CompositionEvent): void {
+  if (getCompareContentEditor(event.target)) {
+    isComposingInput = true;
+    return;
+  }
+
   const target = toInputElement(event.target) ?? toTextAreaElement(event.target);
   if (target && isManagedTextControl(target)) {
     isComposingInput = true;
@@ -2174,6 +2349,14 @@ function onCompositionStart(event: CompositionEvent): void {
 }
 
 function onCompositionEnd(event: CompositionEvent): void {
+  const compareEditor = getCompareContentEditor(event.target);
+  if (compareEditor) {
+    isComposingInput = false;
+    updateCompareEditorState(compareEditor);
+    scheduleCompareTextRender(compareEditor);
+    return;
+  }
+
   const target = toInputElement(event.target) ?? toTextAreaElement(event.target);
   if (!target || !isManagedTextControl(target)) {
     isComposingInput = false;
@@ -2182,6 +2365,10 @@ function onCompositionEnd(event: CompositionEvent): void {
 
   isComposingInput = false;
   updateTextControlState(target);
+  if (isCompareContentControl(target)) {
+    scheduleCompareTextRender(target);
+    return;
+  }
   renderPreservingTextControl(target);
 }
 
@@ -2198,6 +2385,12 @@ function updateTextControlState(target: HTMLInputElement | HTMLTextAreaElement):
   if (target.name === 'detailContent') {
     updateDetailContent(target.value);
   }
+  if (target.name === 'compareSourceContent') {
+    updateComparePaneContent('source', target.dataset.entryId ?? '', target.value);
+  }
+  if (target.name === 'compareTargetContent') {
+    updateComparePaneContent('target', target.dataset.entryId ?? '', target.value);
+  }
   if (target.name === 'versionCustomTemplate') {
     versionState.customTemplate = target.value;
     persistVersionImportSourcePreference();
@@ -2205,9 +2398,137 @@ function updateTextControlState(target: HTMLInputElement | HTMLTextAreaElement):
 }
 
 function isManagedTextControl(target: HTMLInputElement | HTMLTextAreaElement): boolean {
-  return ['sourceQuery', 'targetQuery', 'favoriteQuery', 'detailContent', 'versionCustomTemplate'].includes(
-    target.name,
-  );
+  return [
+    'sourceQuery',
+    'targetQuery',
+    'favoriteQuery',
+    'detailContent',
+    'compareSourceContent',
+    'compareTargetContent',
+    'versionCustomTemplate',
+  ].includes(target.name);
+}
+
+function isCompareContentControl(target: HTMLInputElement | HTMLTextAreaElement): target is HTMLTextAreaElement {
+  return target.tagName === 'TEXTAREA' && isCompareContentName(target.name);
+}
+
+function getCompareContentEditor(target: EventTarget | null): HTMLElement | null {
+  const element = toElement(target);
+  const editor = element?.closest<HTMLElement>('.pm-compare-content-input');
+  return editor && isCompareContentEditor(editor) ? editor : null;
+}
+
+function updateCompareEditorState(editor: HTMLElement): void {
+  const kind = editor.dataset.entryKind;
+  if (kind !== 'source' && kind !== 'target') {
+    return;
+  }
+  updateComparePaneContent(kind, editor.dataset.entryId ?? '', editor.innerText);
+  rememberCompareContentScroll(editor);
+}
+
+function scheduleCompareTextRender(target: HTMLElement): void {
+  const targetWindow = target.ownerDocument.defaultView ?? window;
+  if (compareTextRenderTimer !== null) {
+    targetWindow.clearTimeout(compareTextRenderTimer);
+  }
+
+  compareTextRenderTimer = targetWindow.setTimeout(() => {
+    compareTextRenderTimer = null;
+    if (target.isConnected) {
+      if (isCompareContentEditor(target)) {
+        renderPreservingCompareContentEditor(target);
+        return;
+      }
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
+        renderPreservingTextControl(target);
+        return;
+      }
+      return;
+    }
+    render();
+  }, COMPARE_TEXT_RENDER_DEBOUNCE_MS);
+}
+
+function renderPreservingCompareContentEditor(target: HTMLElement): void {
+  const key = getCompareContentScrollKey(target);
+  const scrollTop = target.scrollTop;
+  const scrollLeft = target.scrollLeft;
+  const selection = captureContentEditableSelection(target);
+  const targetDocument = target.ownerDocument ?? getMountDocument();
+
+  render();
+
+  const root = targetDocument.getElementById(ROOT_ID);
+  const replacement = root ? findScrollElement(root, key) : null;
+  if (!replacement || !isCompareContentEditor(replacement)) {
+    return;
+  }
+
+  replacement.focus();
+  replacement.scrollTop = scrollTop;
+  replacement.scrollLeft = scrollLeft;
+  rememberCompareContentScroll(replacement);
+  if (selection) {
+    restoreContentEditableSelection(replacement, selection);
+  }
+}
+
+function captureContentEditableSelection(root: HTMLElement): { start: number; end: number } | null {
+  const selection = root.ownerDocument.getSelection();
+  if (!selection || selection.rangeCount === 0) {
+    return null;
+  }
+
+  const range = selection.getRangeAt(0);
+  if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) {
+    return null;
+  }
+
+  return {
+    start: getTextOffset(root, range.startContainer, range.startOffset),
+    end: getTextOffset(root, range.endContainer, range.endOffset),
+  };
+}
+
+function getTextOffset(root: HTMLElement, node: Node, offset: number): number {
+  const range = root.ownerDocument.createRange();
+  range.selectNodeContents(root);
+  range.setEnd(node, offset);
+  return range.toString().length;
+}
+
+function restoreContentEditableSelection(root: HTMLElement, selection: { start: number; end: number }): void {
+  const range = root.ownerDocument.createRange();
+  const start = findTextPosition(root, selection.start);
+  const end = findTextPosition(root, selection.end);
+  range.setStart(start.node, start.offset);
+  range.setEnd(end.node, end.offset);
+
+  const activeSelection = root.ownerDocument.getSelection();
+  activeSelection?.removeAllRanges();
+  activeSelection?.addRange(range);
+}
+
+function findTextPosition(root: HTMLElement, offset: number): { node: Node; offset: number } {
+  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let remaining = Math.max(0, offset);
+  let lastTextNode: Text | null = null;
+
+  while (walker.nextNode()) {
+    const textNode = walker.currentNode as Text;
+    lastTextNode = textNode;
+    if (remaining <= textNode.data.length) {
+      return { node: textNode, offset: remaining };
+    }
+    remaining -= textNode.data.length;
+  }
+
+  if (lastTextNode) {
+    return { node: lastTextNode, offset: lastTextNode.data.length };
+  }
+  return { node: root, offset: 0 };
 }
 
 function renderPreservingTextControl(target: HTMLInputElement | HTMLTextAreaElement): void {
@@ -2230,6 +2551,9 @@ function renderPreservingTextControl(target: HTMLInputElement | HTMLTextAreaElem
 
   replacement.focus();
   replacement.scrollTop = scrollTop;
+  if (replacement.tagName === 'TEXTAREA') {
+    replacement.scrollLeft = target.scrollLeft;
+  }
   if (selectionStart !== null && selectionEnd !== null) {
     replacement.setSelectionRange(selectionStart, selectionEnd);
   }
@@ -2249,7 +2573,7 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
   clearMessage();
 
   if (state.compareMode && isCompareReadOnlyBlockedAction(action)) {
-    state.notice = '比对模式下不会修改预设';
+    state.notice = '比对模式下不支持这个操作';
     render();
     return;
   }
@@ -2259,10 +2583,8 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
     case 'close':
       closeManager();
       return;
-    case 'refresh':
-      hydratePresetList({ targetFromLoaded: true });
-      state.notice = '已刷新预设列表';
-      render();
+    case 'start-tutorial':
+      presetManagerTutorial.start({ manual: true, interrupt: true });
       return;
     case 'open-version-manager':
       openVersionManager();
@@ -2399,7 +2721,6 @@ function isCompareReadOnlyBlockedAction(action: string): boolean {
     'entry-clear-selection',
     'entry-batch-favorite',
     'entry-batch-delete',
-    'entry-toggle-enabled',
     'source-remove',
     'copy-source',
     'copy-selected',
@@ -2412,8 +2733,6 @@ function isCompareReadOnlyBlockedAction(action: string): boolean {
     'insert-favorite',
     'insert-favorite-id',
     'delete-favorite',
-    'reset-draft',
-    'save',
   ].includes(action);
 }
 
@@ -2428,6 +2747,7 @@ function closeManager(): void {
     resetTargetDraft();
   }
 
+  presetManagerTutorial.close();
   state.isOpen = false;
   render();
 }
@@ -2861,6 +3181,13 @@ function selectRow(row: HTMLElement): void {
     render();
     return;
   }
+  if ((kind === 'source' || kind === 'target') && state.compareMode) {
+    selectCompareEntryById(kind, id);
+    state.activeTab = state.activeTab === 'preview' ? 'preview' : kind;
+    requestScrollSelectedRowOnNextRender();
+    render();
+    return;
+  }
   if (kind === 'source') {
     state.selectedSourceId = id;
     state.selectedTargetId = '';
@@ -2878,6 +3205,26 @@ function selectRow(row: HTMLElement): void {
     state.activeTab = state.activeTab === 'preview' ? 'preview' : 'source';
   }
   render();
+}
+
+function selectCompareEntryById(kind: SelectableEntryKind, id: string): void {
+  const comparison = comparePromptEntries(getSourceCompareEntries(), getTargetCompareEntries());
+  const pair = getComparePairForEntry(comparison, kind, id);
+  if (pair?.sourceEntry) {
+    state.selectedSourceId = pair.sourceEntry.id;
+  } else if (kind === 'source') {
+    state.selectedSourceId = id;
+  } else {
+    state.selectedSourceId = '';
+  }
+
+  if (pair?.targetEntry) {
+    state.selectedTargetId = pair.targetEntry.id;
+  } else if (kind === 'target') {
+    state.selectedTargetId = id;
+  } else {
+    state.selectedTargetId = '';
+  }
 }
 
 function copySourceById(id: string): void {
@@ -3069,6 +3416,50 @@ function updateDetailRole(role: string): void {
     return;
   }
   updateTargetRole(role);
+}
+
+function updateComparePaneContent(kind: SelectableEntryKind, id: string, content: string): void {
+  const draft = kind === 'source' ? getEditableSourceDraft() : state.targetDraft;
+  if (!draft || !id) {
+    return;
+  }
+
+  setPromptContent(draft, id, content);
+  selectEntryById(kind, id);
+  if (kind === 'source') {
+    markSourceDirty();
+  } else {
+    markTargetDirty();
+  }
+}
+
+function updateComparePaneRole(kind: SelectableEntryKind, id: string, role: string): void {
+  const draft = kind === 'source' ? getEditableSourceDraft() : state.targetDraft;
+  if (!draft || !id) {
+    return;
+  }
+
+  setPromptRole(draft, id, role);
+  selectEntryById(kind, id);
+  if (kind === 'source') {
+    markSourceDirty();
+  } else {
+    markTargetDirty();
+  }
+}
+
+function selectEntryById(kind: SelectableEntryKind, id: string): void {
+  if (state.compareMode) {
+    selectCompareEntryById(kind, id);
+    return;
+  }
+  if (kind === 'source') {
+    state.selectedSourceId = id;
+    state.selectedTargetId = '';
+  } else {
+    state.selectedTargetId = id;
+    state.selectedSourceId = '';
+  }
 }
 
 function updateSourceContent(content: string): void {

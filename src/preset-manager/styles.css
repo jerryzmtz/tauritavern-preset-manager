@@ -667,7 +667,8 @@
 
 .pm-compare-pane-head strong,
 .pm-compare-pane-head span,
-.pm-compare-pane-title {
+.pm-compare-pane-title,
+.pm-compare-role-field {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -683,16 +684,63 @@
   font-size: 0.74rem;
 }
 
-.pm-compare-pane-title {
+.pm-compare-pane-title-row {
+  display: flex;
+  align-items: end;
+  gap: 8px;
   padding: 6px 8px;
-  color: var(--pm-text);
-  font-weight: 650;
   border-bottom: 1px solid var(--pm-border-soft);
 }
 
-.pm-compare-text {
+.pm-compare-pane-title {
   flex: 1 1 auto;
+  color: var(--pm-text);
+  font-weight: 650;
+}
+
+.pm-compare-role-field {
+  flex: 0 0 118px;
+  display: grid;
+  gap: 3px;
+}
+
+.pm-compare-role-field span {
+  color: var(--pm-muted);
+  font-size: 0.7rem;
+}
+
+.pm-compare-role-field select {
   width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 7px;
+  color: var(--pm-text);
+  background: color-mix(in srgb, var(--pm-surface-strong) 88%, transparent);
+  border: 1px solid var(--pm-border-soft);
+  border-radius: var(--pm-radius);
+  outline: none;
+}
+
+.pm-compare-role-field select:focus {
+  border-color: var(--pm-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pm-accent) 18%, transparent);
+}
+
+.pm-compare-editor {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  background: color-mix(in srgb, var(--pm-surface-strong) 82%, transparent);
+  overflow: hidden;
+}
+
+.pm-compare-text {
+  position: relative;
+  flex: 1 1 0;
+  box-sizing: border-box;
+  width: 100%;
+  height: auto;
   min-height: 0;
   overflow: auto;
   padding: 9px 10px;
@@ -704,18 +752,22 @@
   font-family: ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
   font-size: 0.78rem;
   line-height: 1.5;
+  tab-size: 8;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: break-word;
   user-select: text;
 }
 
 .pm-compare-token {
   display: inline;
-  padding: 0 2px;
-  color: color-mix(in srgb, var(--pm-warning) 42%, var(--pm-text) 58%);
-  background: color-mix(in srgb, var(--pm-warning) 24%, transparent);
-  border: 1px solid color-mix(in srgb, var(--pm-warning) 48%, transparent);
-  border-radius: 4px;
+  padding: 0;
+  color: var(--pm-text);
+  background: color-mix(in srgb, var(--pm-warning) 28%, transparent);
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pm-warning) 58%, transparent),
+    0 0 0 2px color-mix(in srgb, var(--pm-warning) 16%, transparent);
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }

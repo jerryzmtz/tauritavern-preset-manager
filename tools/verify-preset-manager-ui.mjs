@@ -1,4 +1,4 @@
-import { createServer } from 'node:http';
+﻿import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -35,6 +35,8 @@ async function importPlaywright() {
   }
 }
 
+const compareScrollBody = Array.from({ length: 220 }, (_, index) => `共同滚动占位 ${index + 1}`).join('\n');
+
 const fixturePresets = [
   {
     name: '雪月agent_v1（自改）',
@@ -47,7 +49,7 @@ const fixturePresets = [
           identifier: 'shared-diff',
           name: '共同正文不同',
           role: 'system',
-          content: '共同第一行 {{random::红玫瑰::蓝月亮}}\n共同第二行',
+          content: `共同第一行 {{random::红玫瑰::蓝月亮}}\n${compareScrollBody}\n共同第二行`,
         },
         { identifier: 'shared-meta', name: '来源标题不同', role: 'system', content: '辅助差异正文相同' },
         { identifier: 'source-name-match', name: '唯一同名条目', role: 'system', content: '来源同名正文' },
@@ -89,7 +91,7 @@ const fixturePresets = [
           identifier: 'shared-diff',
           name: '共同正文不同',
           role: 'system',
-          content: '共同第一行 {{random::红玫瑰}}\n共同第二行',
+          content: `共同第一行 {{random::红玫瑰}}\n${compareScrollBody}\n共同第二行`,
         },
         { identifier: 'shared-meta', name: '目标标题不同', role: 'user', content: '辅助差异正文相同' },
         { identifier: 'target-name-match', name: '唯一同名条目', role: 'system', content: '目标同名正文' },
@@ -134,6 +136,21 @@ for (let index = 0; index < 18; index += 1) {
   });
   fixturePresets[1].preset.prompt_order[0].order.push({ identifier: targetId, enabled: index % 2 !== 0 });
 }
+
+fixturePresets[0].preset.prompts.push({
+  identifier: 'deep-shared-match',
+  name: '深层共同条目',
+  role: 'system',
+  content: '来源深层共同条目的正文不同',
+});
+fixturePresets[0].preset.prompt_order[0].order.push({ identifier: 'deep-shared-match', enabled: true });
+fixturePresets[1].preset.prompts.push({
+  identifier: 'deep-shared-match',
+  name: '深层共同条目',
+  role: 'system',
+  content: '目标深层共同条目的正文不同',
+});
+fixturePresets[1].preset.prompt_order[0].order.push({ identifier: 'deep-shared-match', enabled: true });
 
 function serveFixture() {
   let savedPreset = null;
@@ -233,7 +250,7 @@ function serveFixture() {
         enabled: true,
         name: '预设管理',
         id: 'preset-manager-script-id',
-        content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v2.10/dist/preset-manager/index.js';",
+        content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v2.11/dist/preset-manager/index.js';",
         info: '',
         button: { enabled: true, buttons: [] },
         data: {},
@@ -246,13 +263,13 @@ function serveFixture() {
     window.fetch = (input, init) => {
       const href = String(input);
       if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/releases/latest') {
-        return Promise.resolve(new Response(JSON.stringify({ tag_name: 'v2.10' }), {
+        return Promise.resolve(new Response(JSON.stringify({ tag_name: 'v2.11' }), {
           status: 200,
           headers: { 'content-type': 'application/json; charset=utf-8' },
         }));
       }
       if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/tags?per_page=20') {
-        return Promise.resolve(new Response(JSON.stringify([{ name: 'v2.10' }, { name: 'v2.00' }, { name: 'v1.32' }, { name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }] ), {
+        return Promise.resolve(new Response(JSON.stringify([{ name: 'v2.11' }, { name: 'v2.00' }, { name: 'v1.32' }, { name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }] ), {
           status: 200,
           headers: { 'content-type': 'application/json; charset=utf-8' },
         }));
@@ -455,7 +472,7 @@ function serveFixture() {
           enabled: true,
           name: '预设管理',
           id: 'zero-frame-script-id',
-          content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v2.10/dist/preset-manager/index.js';",
+          content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v2.11/dist/preset-manager/index.js';",
           info: '',
           button: { enabled: true, buttons: [] },
           data: {},
@@ -468,13 +485,13 @@ function serveFixture() {
       child.fetch = (input, init) => {
         const href = String(input);
         if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/releases/latest') {
-          return Promise.resolve(new child.Response(JSON.stringify({ tag_name: 'v2.10' }), {
+          return Promise.resolve(new child.Response(JSON.stringify({ tag_name: 'v2.11' }), {
             status: 200,
             headers: { 'content-type': 'application/json; charset=utf-8' },
           }));
         }
         if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/tags?per_page=20') {
-          return Promise.resolve(new child.Response(JSON.stringify([{ name: 'v2.10' }, { name: 'v2.00' }, { name: 'v1.32' }, { name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }] ), {
+          return Promise.resolve(new child.Response(JSON.stringify([{ name: 'v2.11' }, { name: 'v2.00' }, { name: 'v1.32' }, { name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }] ), {
             status: 200,
             headers: { 'content-type': 'application/json; charset=utf-8' },
           }));
@@ -995,14 +1012,14 @@ async function verifyCompareMode(page, fixture, viewportName) {
     () => document.querySelector('[data-compare-filter="source_only"]')?.getAttribute('aria-pressed') === 'false',
   );
 
-  if (!(await sourceDiff.locator('.pm-row-toggle').isDisabled())) {
-    throw new Error(`${viewportName}: 比对模式下条目开关应禁用`);
+  if (await targetDiff.locator('.pm-row-toggle').isDisabled()) {
+    throw new Error(`${viewportName}: 比对模式下应允许修改条目开关`);
   }
   if (!(await page.getByRole('button', { name: /保存预设/ }).isDisabled())) {
-    throw new Error(`${viewportName}: 比对模式下保存按钮应禁用`);
+    throw new Error(`${viewportName}: 比对模式下没有改动时保存按钮应禁用`);
   }
 
-  await sourceDiff.click();
+  await targetDiff.click();
   await page.locator('.pm-compare-detail').waitFor({ state: 'visible' });
   const detailText = await page.locator('.pm-compare-detail').innerText();
   if (!detailText.includes('正文不同')) {
@@ -1013,25 +1030,110 @@ async function verifyCompareMode(page, fixture, viewportName) {
   if (
     !(await sourceCompareText.innerText()).includes('共同第一行') ||
     !(await targetCompareText.innerText()).includes('共同第一行') ||
-    (await sourceCompareText.getAttribute('aria-readonly')) !== 'true' ||
-    (await targetCompareText.getAttribute('aria-readonly')) !== 'true'
+    (await sourceCompareText.getAttribute('aria-readonly')) !== 'false' ||
+    (await targetCompareText.getAttribute('aria-readonly')) !== 'false'
   ) {
-    throw new Error(`${viewportName}: 比对详情没有使用清晰的只读正文视图`);
+    throw new Error(`${viewportName}: 比对详情没有在来源/目标窗口里直接提供可编辑正文`);
   }
-  const sourceDiffMarks = await sourceCompareText.locator('.pm-compare-token').allInnerTexts();
-  const targetDiffMarks = await targetCompareText.locator('.pm-compare-token').allInnerTexts();
+  const sourceDiffMarks = await page
+    .locator('[data-compare-highlight="compareSourceContent"] .pm-compare-token')
+    .allInnerTexts();
+  const targetDiffMarks = await page
+    .locator('[data-compare-highlight="compareTargetContent"] .pm-compare-token')
+    .allInnerTexts();
   if (!sourceDiffMarks.join('').includes('蓝月亮') && !targetDiffMarks.join('').includes('蓝月亮')) {
     throw new Error(`${viewportName}: 比对详情没有高亮 prompt 内部差异片段`);
   }
-  if (await page.locator('textarea[name="compareSourceContent"], textarea[name="compareTargetContent"]').count()) {
-    throw new Error(`${viewportName}: 比对模式详情不应退回不可高亮的 textarea`);
+  const highlightStyle = await page
+    .locator('[data-compare-highlight="compareSourceContent"] .pm-compare-token')
+    .first()
+    .evaluate(element => {
+      const style = getComputedStyle(element);
+      return { backgroundColor: style.backgroundColor, boxShadow: style.boxShadow };
+    });
+  if (highlightStyle.backgroundColor === 'rgba(0, 0, 0, 0)' || highlightStyle.boxShadow === 'none') {
+    throw new Error(`${viewportName}: 比对详情差异片段的高亮视觉强度不足`);
   }
-  if (await page.locator('textarea[name="detailContent"]').count()) {
-    throw new Error(`${viewportName}: 比对模式详情不应提供可编辑正文框`);
+  if (await page.locator('.pm-compare-edit, textarea[name="detailContent"]').count()) {
+    throw new Error(`${viewportName}: 比对模式不应额外增加独立编辑窗口`);
   }
+  const targetScrollBeforeSourceEdit = await targetCompareText.evaluate(element => {
+    element.scrollTop = element.scrollHeight;
+    return element.scrollTop;
+  });
+  if (targetScrollBeforeSourceEdit <= 0) {
+    throw new Error(`${viewportName}: 目标对比窗口测试内容不足，无法验证滚动保持`);
+  }
+  const editedSourceCompareContent = `${await sourceCompareText.innerText()}\n来源侧即时编辑行`;
+  await sourceCompareText.fill(editedSourceCompareContent);
+  await page.waitForTimeout(320);
+  const targetScrollAfterSourceEdit = await targetCompareText.evaluate(element => element.scrollTop);
+  if (targetScrollAfterSourceEdit < targetScrollBeforeSourceEdit - 4) {
+    throw new Error(`${viewportName}: 修改来源正文时目标对比窗口不应回顶`);
+  }
+  const sourceScrollBeforeTargetEdit = await sourceCompareText.evaluate(element => {
+    element.scrollTop = element.scrollHeight;
+    return {
+      top: element.scrollTop,
+      scrollHeight: element.scrollHeight,
+      clientHeight: element.clientHeight,
+      textLength: element.textContent?.length ?? 0,
+    };
+  });
+  if (sourceScrollBeforeTargetEdit.top <= 0) {
+    throw new Error(
+      `${viewportName}: 来源对比窗口测试内容不足，无法验证滚动保持 ${JSON.stringify(sourceScrollBeforeTargetEdit)}`,
+    );
+  }
+  const editedCompareContent = '共同第一行 {{random::红玫瑰::白山茶}}\n共同第二行';
+  await targetCompareText.fill(editedCompareContent);
+  await page.waitForTimeout(320);
+  const sourceScrollAfterTargetEdit = await sourceCompareText.evaluate(element => element.scrollTop);
+  if (sourceScrollAfterTargetEdit < sourceScrollBeforeTargetEdit.top - 4) {
+    throw new Error(`${viewportName}: 修改目标正文时来源对比窗口不应回顶`);
+  }
+  await page.locator('select[name="compareTargetRole"]').selectOption('assistant');
+  if (fixture.getSavedPreset() !== null) {
+    throw new Error(`${viewportName}: 比对模式详情编辑不应在点击保存前调用保存接口`);
+  }
+  if (await page.getByRole('button', { name: /保存预设/ }).isDisabled()) {
+    throw new Error(`${viewportName}: 比对模式编辑后应允许直接保存`);
+  }
+  await targetDiff.locator('.pm-row-toggle').click();
+  await page.waitForFunction(
+    () =>
+      [...document.querySelectorAll('.pm-pane-target .pm-row')]
+        .find(row => row.textContent?.includes('共同正文不同'))
+        ?.querySelector('.pm-row-toggle')
+        ?.getAttribute('aria-pressed') === 'false',
+  );
+  await page.getByRole('button', { name: /保存预设/ }).click();
+  await page.waitForFunction(() =>
+    document.querySelector('.pm-footer-status')?.textContent?.includes('暂无未保存修改'),
+  );
+  const savedFromCompare = fixture.getSavedPreset();
+  const savedComparePrompt = savedFromCompare?.preset?.prompts?.find(prompt => prompt.id === 'shared-diff');
+  if (
+    !savedFromCompare ||
+    savedFromCompare.name !== 'in_use' ||
+    savedComparePrompt?.content !== editedCompareContent ||
+    savedComparePrompt?.role !== 'assistant' ||
+    savedComparePrompt?.enabled !== false
+  ) {
+    throw new Error(
+      `${viewportName}: 比对模式下编辑、开关和保存没有正确写入目标预设 ${JSON.stringify({
+        name: savedFromCompare?.name,
+        content: savedComparePrompt?.content,
+        role: savedComparePrompt?.role,
+        enabled: savedComparePrompt?.enabled,
+      })}`,
+    );
+  }
+  await verifyNoPresetManagerBackups(page, viewportName);
 
   await page.locator('input[name="sourceQuery"]').fill('共同');
   await page.locator('select[name="sourceFilter"]').selectOption('system');
+  fixture.clearSavedPreset();
   if (fixture.getSavedPreset() !== null) {
     throw new Error(`${viewportName}: 比对模式搜索或过滤不应调用保存接口`);
   }
@@ -1042,8 +1144,118 @@ async function verifyCompareMode(page, fixture, viewportName) {
   await page.waitForFunction(
     () => document.querySelector('[data-action="toggle-compare"]')?.getAttribute('aria-pressed') === 'false',
   );
+  const selectedNormalTarget = await rowByTitle(page, '.pm-pane-target', '共同正文不同').first().getAttribute('class');
+  if (!selectedNormalTarget?.split(/\s+/).includes('is-selected')) {
+    throw new Error(`${viewportName}: 比对模式中选中的条目应继承到普通模式`);
+  }
+  if ((await page.locator('textarea[name="detailContent"]').inputValue()) !== editedCompareContent) {
+    throw new Error(`${viewportName}: 回到普通模式后详情区没有保持选中条目的编辑内容`);
+  }
+
+  await compareButton.click();
+  await page.waitForFunction(
+    () => document.querySelector('[data-action="toggle-compare"]')?.getAttribute('aria-pressed') === 'true',
+  );
+  const deepTargetRow = rowByTitle(page, '.pm-pane-target', '深层共同条目').first();
+  await deepTargetRow.scrollIntoViewIfNeeded();
+  await page.locator('.pm-pane-source .pm-list').evaluate(element => {
+    element.scrollTop = 0;
+  });
+  await deepTargetRow.click();
+  await page.waitForFunction(() => {
+    const list = document.querySelector('.pm-pane-source .pm-list');
+    const row = [...document.querySelectorAll('.pm-pane-source .pm-row')].find(element =>
+      element.textContent?.includes('深层共同条目'),
+    );
+    if (!list || !row) return false;
+    const listRect = list.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    return row.classList.contains('is-selected') && rowRect.bottom > listRect.top && rowRect.top < listRect.bottom;
+  });
+  await page.locator('.pm-pane-source .pm-list, .pm-pane-target .pm-list').evaluateAll(elements => {
+    for (const element of elements) {
+      element.scrollTop = 0;
+    }
+  });
+  await compareButton.click();
+  await page.waitForFunction(
+    () => document.querySelector('[data-action="toggle-compare"]')?.getAttribute('aria-pressed') === 'false',
+  );
+  const deepRowsVisible = await page.evaluate(() => {
+    return ['.pm-pane-source', '.pm-pane-target'].every(paneSelector => {
+      const list = document.querySelector(`${paneSelector} .pm-list`);
+      const row = [...document.querySelectorAll(`${paneSelector} .pm-row`)].find(element =>
+        element.textContent?.includes('深层共同条目'),
+      );
+      if (!list || !row) return false;
+      const listRect = list.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      return row.classList.contains('is-selected') && rowRect.bottom > listRect.top && rowRect.top < listRect.bottom;
+    });
+  });
+  if (!deepRowsVisible) {
+    throw new Error(`${viewportName}: 关闭比对模式后来源和目标都应自动滚动到配对条目`);
+  }
+
   if (fixture.getSavedPreset() !== null) {
     throw new Error(`${viewportName}: 开关比对模式不应调用保存接口`);
+  }
+}
+
+async function verifyTutorial(page, fixture, viewportName) {
+  if (await page.locator('[data-action="refresh"]').count()) {
+    throw new Error(`${viewportName}: 顶部不应再提供无实际用途的刷新按钮`);
+  }
+
+  fixture.clearSavedPreset();
+  await page.getByTitle('打开教程').click();
+  await page.locator('.pm-tutorial-overlay').waitFor({ state: 'visible' });
+  const firstStepText = await page.locator('.pm-tutorial-popover').innerText();
+  if (!firstStepText.includes('预设管理') || !firstStepText.includes('保存预设') || firstStepText.includes('????')) {
+    throw new Error(`${viewportName}: 教程首屏中文内容异常`);
+  }
+
+  const highlightBox = await page.locator('.pm-tutorial-highlight').boundingBox();
+  if (!highlightBox || highlightBox.width < 100 || highlightBox.height < 100) {
+    throw new Error(`${viewportName}: 教程没有高亮当前步骤目标`);
+  }
+
+  await page.locator('[data-pm-tutorial-action="next"]').click();
+  await page.waitForFunction(() => document.querySelector('.pm-tutorial-progress')?.textContent?.startsWith('2 /'));
+  const secondStepText = await page.locator('.pm-tutorial-popover').innerText();
+  if (!secondStepText.includes('来源预设')) {
+    throw new Error(`${viewportName}: 教程下一步没有定位到来源预设`);
+  }
+
+  await page.waitForTimeout(260);
+  for (let index = 0; index < 3; index += 1) {
+    await page.locator('[data-pm-tutorial-action="next"]').click();
+    await page.waitForTimeout(260);
+  }
+  await page.waitForFunction(() => document.querySelector('.pm-tutorial-progress')?.textContent?.startsWith('5 /'));
+  const toggleStepText = await page.locator('.pm-tutorial-popover').innerText();
+  if (!toggleStepText.includes('条目开关')) {
+    throw new Error(`${viewportName}: 教程没有进入条目开关步骤`);
+  }
+  const overlap = await page.evaluate(() => {
+    const popover = document.querySelector('.pm-tutorial-popover')?.getBoundingClientRect();
+    const highlight = document.querySelector('.pm-tutorial-highlight')?.getBoundingClientRect();
+    if (!popover || !highlight) return true;
+    return !(
+      popover.right <= highlight.left ||
+      popover.left >= highlight.right ||
+      popover.bottom <= highlight.top ||
+      popover.top >= highlight.bottom
+    );
+  });
+  if (overlap) {
+    throw new Error(`${viewportName}: 条目开关步骤的教程窗口不应遮住高亮按钮`);
+  }
+
+  await page.locator('[data-pm-tutorial-action="dismiss"]').click();
+  await page.locator('.pm-tutorial-overlay').waitFor({ state: 'detached' });
+  if (fixture.getSavedPreset() !== null) {
+    throw new Error(`${viewportName}: 打开或关闭教程不应调用保存接口`);
   }
 }
 
@@ -1387,8 +1599,11 @@ try {
     if (!bodyText.includes('条目详情') || bodyText.includes('草稿') || bodyText.includes('结构正常')) {
       throw new Error(`${viewport.name}: 出现了应移除的旧文案`);
     }
+    if (await page.locator('[data-action="refresh"]').count()) {
+      throw new Error(`${viewport.name}: 顶部刷新按钮应该已删除`);
+    }
     const versionText = await page.locator('.pm-version-chip').textContent();
-    if (versionText?.trim() !== 'v2.10') {
+    if (versionText?.trim() !== 'v2.11') {
       throw new Error(`${viewport.name}: 标题旁没有显示当前版本号`);
     }
 
@@ -1415,9 +1630,10 @@ try {
       throw new Error(`${viewport.name}: 目标预设没有默认使用当前 TT 预设`);
     }
     if (viewport.name === 'desktop-wide') {
+      await verifyTutorial(page, fixture, viewport.name);
       await page.locator('.pm-version-button').click();
       await page.locator('.pm-version-box').waitFor({ state: 'visible' });
-      await page.waitForFunction(() => document.body.innerText.includes('v2.10'));
+      await page.waitForFunction(() => document.body.innerText.includes('v2.11'));
       if (await page.locator('.pm-version-row[data-version="v0.99"]').count()) {
         throw new Error(`${viewport.name}: 版本列表不应显示 v1.0.0 以前的版本`);
       }
