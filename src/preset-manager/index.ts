@@ -143,7 +143,6 @@ interface AppState {
   sourceDraft: Preset | null;
   targetOriginal: Preset | null;
   targetDraft: Preset | null;
-  backedUpTargets: Record<string, string>;
   favorites: FavoriteEntry[];
 }
 
@@ -188,7 +187,6 @@ const state: AppState = {
   sourceDraft: null,
   targetOriginal: null,
   targetDraft: null,
-  backedUpTargets: {},
   favorites: [],
 };
 
@@ -368,7 +366,9 @@ function bindHelperButtonClickFallback(): void {
 
 function onPotentialHelperButtonClick(event: MouseEvent): void {
   const target = toElement(event.target);
-  const button = target?.closest<HTMLElement>('button, [role="button"], .menu_button, [data-button-name], [data-script-button]');
+  const button = target?.closest<HTMLElement>(
+    'button, [role="button"], .menu_button, [data-button-name], [data-script-button]',
+  );
   if (!button || !isHelperButtonElement(button)) {
     return;
   }
@@ -388,10 +388,12 @@ function isHelperButtonElement(button: HTMLElement): boolean {
   const ariaLabel = button.getAttribute('aria-label')?.trim();
   const title = button.getAttribute('title')?.trim();
   const text = button.textContent?.trim();
-  return ariaLabel === HELPER_BUTTON_NAME
-    || title === HELPER_BUTTON_NAME
-    || title === `打开${HELPER_BUTTON_NAME}管理器`
-    || text === HELPER_BUTTON_NAME;
+  return (
+    ariaLabel === HELPER_BUTTON_NAME ||
+    title === HELPER_BUTTON_NAME ||
+    title === `打开${HELPER_BUTTON_NAME}管理器` ||
+    text === HELPER_BUTTON_NAME
+  );
 }
 
 function helperGetPresetNames(): string[] {
@@ -719,7 +721,10 @@ function createManagerRoot(): HTMLElement {
   if (scriptId) {
     root.setAttribute('script_id', scriptId);
   }
-  diagnose('root-created', { hasScriptId: root.hasAttribute('script_id'), mountedInParent: targetDocument !== document });
+  diagnose('root-created', {
+    hasScriptId: root.hasAttribute('script_id'),
+    mountedInParent: targetDocument !== document,
+  });
   return root;
 }
 
@@ -789,17 +794,17 @@ function toElement(target: EventTarget | null): Element | null {
 
 function toInputElement(target: EventTarget | null): HTMLInputElement | null {
   const element = toElement(target);
-  return element?.tagName === 'INPUT' ? element as HTMLInputElement : null;
+  return element?.tagName === 'INPUT' ? (element as HTMLInputElement) : null;
 }
 
 function toTextAreaElement(target: EventTarget | null): HTMLTextAreaElement | null {
   const element = toElement(target);
-  return element?.tagName === 'TEXTAREA' ? element as HTMLTextAreaElement : null;
+  return element?.tagName === 'TEXTAREA' ? (element as HTMLTextAreaElement) : null;
 }
 
 function toSelectElement(target: EventTarget | null): HTMLSelectElement | null {
   const element = toElement(target);
-  return element?.tagName === 'SELECT' ? element as HTMLSelectElement : null;
+  return element?.tagName === 'SELECT' ? (element as HTMLSelectElement) : null;
 }
 
 function teleportCurrentStyles(): { destroy: () => void } {
@@ -986,12 +991,16 @@ function renderVersionDialog(): string {
               ${renderVersionImportSourceOptions()}
             </select>
           </label>
-          ${versionState.selectedSourceId === CUSTOM_VERSION_IMPORT_SOURCE_ID ? `
+          ${
+            versionState.selectedSourceId === CUSTOM_VERSION_IMPORT_SOURCE_ID
+              ? `
             <label class="pm-field pm-version-custom-source">
               <span>自定义模板</span>
               <input name="versionCustomTemplate" value="${escapeAttr(versionState.customTemplate)}" placeholder="https://.../{version}/dist/preset-manager/index.js" autocomplete="off" />
             </label>
-          ` : ''}
+          `
+              : ''
+          }
           <p>${escapeHtml(getSelectedVersionImportSourceDescription())}</p>
           ${templateValidation.ok ? '' : `<p class="pm-version-error">${escapeHtml(templateValidation.message)}</p>`}
         </section>
@@ -1007,7 +1016,9 @@ function renderVersionDialog(): string {
           </button>
         </div>
 
-        ${targetVersion ? `
+        ${
+          targetVersion
+            ? `
           <section class="pm-version-confirm">
             <div class="pm-version-target">
               <span>目标版本</span>
@@ -1027,19 +1038,29 @@ function renderVersionDialog(): string {
               </button>
             </div>
           </section>
-        ` : ''}
+        `
+            : ''
+        }
 
-        ${versionState.message ? `
+        ${
+          versionState.message
+            ? `
           <section class="pm-version-result ${versionState.messageTone}">
             <div>${escapeHtml(versionState.message)}</div>
-            ${versionState.messageTone === 'success' ? `
+            ${
+              versionState.messageTone === 'success'
+                ? `
               <button class="pm-button" type="button" data-action="reload-page">
                 <i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i>
                 刷新页面
               </button>
-            ` : ''}
+            `
+                : ''
+            }
           </section>
-        ` : ''}
+        `
+            : ''
+        }
 
         <div class="pm-version-list" data-version-list="true">
           ${getVersionRows().map(renderVersionRow).join('')}
@@ -1068,7 +1089,10 @@ function renderVersionImportSourceOptions(): string {
     [CUSTOM_VERSION_IMPORT_SOURCE_ID, '自定义模板'] as const,
   ];
   return options
-    .map(([id, label]) => `<option value="${id}" ${versionState.selectedSourceId === id ? 'selected' : ''}>${escapeHtml(label)}</option>`)
+    .map(
+      ([id, label]) =>
+        `<option value="${id}" ${versionState.selectedSourceId === id ? 'selected' : ''}>${escapeHtml(label)}</option>`,
+    )
     .join('');
 }
 
@@ -1087,7 +1111,14 @@ function renderTab(tab: MobileTab, label: string): string {
   return `<button class="pm-tab" type="button" data-action="tab" data-tab="${tab}" ${selected}>${label}</button>`;
 }
 
-function renderPresetPane(kind: 'source' | 'target', title: string, selectedPreset: string, query: string, filter: FilterValue, entries: PromptEntry[]): string {
+function renderPresetPane(
+  kind: 'source' | 'target',
+  title: string,
+  selectedPreset: string,
+  query: string,
+  filter: FilterValue,
+  entries: PromptEntry[],
+): string {
   const isSource = kind === 'source';
   const selectName = isSource ? 'sourceName' : 'targetName';
   const queryName = isSource ? 'sourceQuery' : 'targetQuery';
@@ -1129,7 +1160,11 @@ function renderPresetPane(kind: 'source' | 'target', title: string, selectedPres
   `;
 }
 
-function renderEntrySelectionToolbar(kind: SelectableEntryKind, selectedPreset: string, entries: PromptEntry[]): string {
+function renderEntrySelectionToolbar(
+  kind: SelectableEntryKind,
+  selectedPreset: string,
+  entries: PromptEntry[],
+): string {
   const enabled = isMultiSelectEnabled(kind);
   const selectedCount = getSelectedEntryIds(kind).filter(id => entries.some(entry => entry.id === id)).length;
   const hasRows = entries.length > 0;
@@ -1144,7 +1179,9 @@ function renderEntrySelectionToolbar(kind: SelectableEntryKind, selectedPreset: 
         <i class="fa-solid fa-list-check" aria-hidden="true"></i>
         <span>条目多选</span>
       </button>
-      ${enabled ? `
+      ${
+        enabled
+          ? `
         <button class="pm-selection-action" type="button" data-action="entry-select-all" data-entry-kind="${kind}" ${hasRows ? '' : 'disabled'}>
           全选
         </button>
@@ -1159,7 +1196,9 @@ function renderEntrySelectionToolbar(kind: SelectableEntryKind, selectedPreset: 
           <i class="fa-solid fa-trash" aria-hidden="true"></i>
           删除
         </button>
-      ` : ''}
+      `
+          : ''
+      }
     </div>
   `;
 }
@@ -1187,7 +1226,10 @@ function renderPresetActions(kind: 'source' | 'target', selectedPreset: string):
 function renderPresetOptions(selectedPreset: string): string {
   const favoritesOption = `<option value="${FAVORITES_PRESET_VALUE}" ${isFavoritesPreset(selectedPreset) ? 'selected' : ''}>${FAVORITES_PRESET_LABEL}</option>`;
   const presetOptions = state.presetNames
-    .map(name => `<option value="${escapeAttr(name)}" ${name === selectedPreset ? 'selected' : ''}>${escapeHtml(name)}</option>`)
+    .map(
+      name =>
+        `<option value="${escapeAttr(name)}" ${name === selectedPreset ? 'selected' : ''}>${escapeHtml(name)}</option>`,
+    )
     .join('');
   return `${favoritesOption}${presetOptions}`;
 }
@@ -1202,7 +1244,9 @@ function renderFilterOptions(active: FilterValue): string {
     ['assistant', '助手'],
   ];
 
-  return options.map(([value, label]) => `<option value="${value}" ${active === value ? 'selected' : ''}>${label}</option>`).join('');
+  return options
+    .map(([value, label]) => `<option value="${value}" ${active === value ? 'selected' : ''}>${label}</option>`)
+    .join('');
 }
 
 function renderEntryRow(kind: 'source' | 'target', entry: PromptEntry, index: number): string {
@@ -1228,8 +1272,21 @@ function renderEntryRow(kind: 'source' | 'target', entry: PromptEntry, index: nu
           <span>${contentLength} 字</span>
         </div>
       </div>
+      ${renderRowToggle(kind, entry)}
       <div class="pm-row-actions">${actions}</div>
     </div>
+  `;
+}
+
+function renderRowToggle(kind: 'source' | 'target', entry: PromptEntry): string {
+  const nextState = entry.enabled ? '禁用' : '启用';
+  const title = `当前${entry.enabled ? '启用' : '禁用'}，点击暂存为${nextState}，底部保存后生效`;
+  const icon = entry.enabled ? 'fa-toggle-on' : 'fa-toggle-off';
+
+  return `
+    <button class="pm-row-toggle" type="button" data-action="entry-toggle-enabled" data-entry-kind="${kind}" data-id="${escapeAttr(entry.id)}" aria-pressed="${entry.enabled ? 'true' : 'false'}" title="${title}" aria-label="${title}">
+      <i class="fa-solid ${icon}" aria-hidden="true"></i>
+    </button>
   `;
 }
 
@@ -1246,9 +1303,7 @@ function renderEntrySelectionButton(kind: SelectableEntryKind, entry: PromptEntr
 function renderRowActions(kind: 'source' | 'target', entry: PromptEntry): string {
   const isFavoritesRow = kind === 'source' ? isFavoritesPreset(state.sourceName) : isFavoritesPreset(state.targetName);
   const favoriteAction = kind === 'source' ? 'favorite-source' : 'favorite-target';
-  const deleteAction = kind === 'target'
-    ? 'target-remove'
-    : 'source-remove';
+  const deleteAction = kind === 'target' ? 'target-remove' : 'source-remove';
   const favoriteDisabled = isFavoritesRow ? 'disabled' : '';
   const deleteDisabled = '';
   const favoriteTitle = isFavoritesRow ? '已在收藏夹' : '收藏条目';
@@ -1267,9 +1322,10 @@ function renderRowActions(kind: 'source' | 'target', entry: PromptEntry): string
 
 function renderDetail(selection: DetailSelection | null): string {
   const entry = selection?.entry;
-  const editable = selection?.kind === 'source'
-    ? Boolean(getEditableSourceDraft())
-    : selection?.kind === 'target' && Boolean(state.targetDraft);
+  const editable =
+    selection?.kind === 'source'
+      ? Boolean(getEditableSourceDraft())
+      : selection?.kind === 'target' && Boolean(state.targetDraft);
   const name = entry?.name ?? '未选择条目';
   const content = entry?.content ?? '';
   const role = entry?.role ?? 'system';
@@ -1304,7 +1360,10 @@ function renderRoleOptions(active: string): string {
     ? Object.keys(labels)
     : [active, ...Object.keys(labels)];
   return roles
-    .map(role => `<option value="${escapeAttr(role)}" ${role === active ? 'selected' : ''}>${escapeHtml(labels[role as DetailRole] ?? role)}</option>`)
+    .map(
+      role =>
+        `<option value="${escapeAttr(role)}" ${role === active ? 'selected' : ''}>${escapeHtml(labels[role as DetailRole] ?? role)}</option>`,
+    )
     .join('');
 }
 
@@ -1321,10 +1380,9 @@ function getStatusText(sourceCount: number, targetCount: number): string {
 }
 
 function getVersionButtonClass(): string {
-  return [
-    versionState.checking ? 'is-checking' : '',
-    isVersionUpdateAvailable() ? 'is-available' : '',
-  ].filter(Boolean).join(' ');
+  return [versionState.checking ? 'is-checking' : '', isVersionUpdateAvailable() ? 'is-available' : '']
+    .filter(Boolean)
+    .join(' ');
 }
 
 function getVersionButtonTitle(): string {
@@ -1360,7 +1418,10 @@ function getSelectedVersionImportTemplate(): string {
   if (versionState.selectedSourceId === CUSTOM_VERSION_IMPORT_SOURCE_ID) {
     return versionState.customTemplate;
   }
-  return VERSION_IMPORT_SOURCES.find(source => source.id === versionState.selectedSourceId)?.template ?? DEFAULT_VERSION_IMPORT_TEMPLATE;
+  return (
+    VERSION_IMPORT_SOURCES.find(source => source.id === versionState.selectedSourceId)?.template ??
+    DEFAULT_VERSION_IMPORT_TEMPLATE
+  );
 }
 
 function validateSelectedVersionImportTemplate(): ReturnType<typeof validateVersionImportTemplate> {
@@ -1413,7 +1474,9 @@ function getSourceEntries(): PromptEntry[] {
 }
 
 function getTargetEntries(): PromptEntry[] {
-  return state.targetDraft ? filterEntries(listPromptEntries(state.targetDraft), state.targetQuery, state.targetFilter) : [];
+  return state.targetDraft
+    ? filterEntries(listPromptEntries(state.targetDraft), state.targetQuery, state.targetFilter)
+    : [];
 }
 
 function filterEntries(entries: PromptEntry[], query: string, filter: FilterValue): PromptEntry[] {
@@ -1501,9 +1564,7 @@ function isEntrySelected(kind: SelectableEntryKind, id: string): boolean {
 
 function toggleEntrySelection(kind: SelectableEntryKind, id: string): void {
   const selectedIds = getSelectedEntryIds(kind);
-  const nextIds = selectedIds.includes(id)
-    ? selectedIds.filter(selectedId => selectedId !== id)
-    : [...selectedIds, id];
+  const nextIds = selectedIds.includes(id) ? selectedIds.filter(selectedId => selectedId !== id) : [...selectedIds, id];
   setSelectedEntryIds(kind, nextIds);
   if (kind === 'source') {
     state.selectedSourceId = id;
@@ -1600,7 +1661,11 @@ function onRootChange(event: Event): void {
   }
 
   if (target.name === 'sourceName') {
-    if (state.sourceDirty && target.value !== state.sourceName && !window.confirm('切换来源预设会放弃当前未保存修改。继续切换？')) {
+    if (
+      state.sourceDirty &&
+      target.value !== state.sourceName &&
+      !window.confirm('切换来源预设会放弃当前未保存修改。继续切换？')
+    ) {
       target.value = state.sourceName;
       return;
     }
@@ -1610,7 +1675,11 @@ function onRootChange(event: Event): void {
   }
 
   if (target.name === 'targetName') {
-    if (state.targetDirty && target.value !== state.targetName && !window.confirm('切换目标预设会放弃当前未保存修改。继续切换？')) {
+    if (
+      state.targetDirty &&
+      target.value !== state.targetName &&
+      !window.confirm('切换目标预设会放弃当前未保存修改。继续切换？')
+    ) {
       target.value = state.targetName;
       return;
     }
@@ -1691,7 +1760,9 @@ function updateTextControlState(target: HTMLInputElement | HTMLTextAreaElement):
 }
 
 function isManagedTextControl(target: HTMLInputElement | HTMLTextAreaElement): boolean {
-  return ['sourceQuery', 'targetQuery', 'favoriteQuery', 'detailContent', 'versionCustomTemplate'].includes(target.name);
+  return ['sourceQuery', 'targetQuery', 'favoriteQuery', 'detailContent', 'versionCustomTemplate'].includes(
+    target.name,
+  );
 }
 
 function renderPreservingTextControl(target: HTMLInputElement | HTMLTextAreaElement): void {
@@ -1700,9 +1771,10 @@ function renderPreservingTextControl(target: HTMLInputElement | HTMLTextAreaElem
   const selectionEnd = target.selectionEnd;
   const scrollTop = target.scrollTop;
   const targetDocument = target.ownerDocument ?? getMountDocument();
-  const selector = target.tagName === 'TEXTAREA'
-    ? `#${ROOT_ID} textarea[name="${CSS.escape(name)}"]`
-    : `#${ROOT_ID} input[name="${CSS.escape(name)}"]`;
+  const selector =
+    target.tagName === 'TEXTAREA'
+      ? `#${ROOT_ID} textarea[name="${CSS.escape(name)}"]`
+      : `#${ROOT_ID} input[name="${CSS.escape(name)}"]`;
 
   render();
 
@@ -1806,6 +1878,9 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
     case 'entry-batch-delete':
       removeSelectedEntries(getEntryKindFromAction(element));
       return;
+    case 'entry-toggle-enabled':
+      toggleEntryEnabled(getEntryKindFromAction(element), element.dataset.id ?? '');
+      return;
     case 'source-remove':
       removeSource(element.dataset.id ?? '');
       return;
@@ -1823,9 +1898,6 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
       return;
     case 'favorite-selected':
       await favoriteEntryById('source', state.selectedSourceId);
-      return;
-    case 'target-toggle':
-      toggleTarget(element.dataset.id ?? '');
       return;
     case 'target-up':
       moveTarget(element.dataset.id ?? '', -1);
@@ -2038,7 +2110,10 @@ function loadVersionImportSourcePreference(): void {
     return;
   }
 
-  if (preference.sourceId === CUSTOM_VERSION_IMPORT_SOURCE_ID || VERSION_IMPORT_SOURCES.some(source => source.id === preference.sourceId)) {
+  if (
+    preference.sourceId === CUSTOM_VERSION_IMPORT_SOURCE_ID ||
+    VERSION_IMPORT_SOURCES.some(source => source.id === preference.sourceId)
+  ) {
     versionState.selectedSourceId = preference.sourceId;
   }
   if (preference.customTemplate) {
@@ -2046,7 +2121,10 @@ function loadVersionImportSourcePreference(): void {
   }
 }
 
-function readVersionImportSourcePreference(): { sourceId: VersionImportSourceSelection; customTemplate: string } | null {
+function readVersionImportSourcePreference(): {
+  sourceId: VersionImportSourceSelection;
+  customTemplate: string;
+} | null {
   try {
     const raw = localStorage.getItem(`${STORAGE_NAMESPACE}:${VERSION_PREFERENCE_KEY}`);
     const parsed: unknown = raw ? JSON.parse(raw) : null;
@@ -2069,16 +2147,20 @@ function persistVersionImportSourcePreference(): void {
   }
 }
 
-function isVersionImportSourcePreference(value: unknown): value is { sourceId: VersionImportSourceSelection; customTemplate: string } {
+function isVersionImportSourcePreference(
+  value: unknown,
+): value is { sourceId: VersionImportSourceSelection; customTemplate: string } {
   if (!value || typeof value !== 'object') {
     return false;
   }
   const record = value as Record<string, unknown>;
   const sourceId = record.sourceId;
   const customTemplate = record.customTemplate;
-  return typeof sourceId === 'string'
-    && (sourceId === CUSTOM_VERSION_IMPORT_SOURCE_ID || VERSION_IMPORT_SOURCES.some(source => source.id === sourceId))
-    && typeof customTemplate === 'string';
+  return (
+    typeof sourceId === 'string' &&
+    (sourceId === CUSTOM_VERSION_IMPORT_SOURCE_ID || VERSION_IMPORT_SOURCES.some(source => source.id === sourceId)) &&
+    typeof customTemplate === 'string'
+  );
 }
 
 function getPresetPaneFromAction(element: HTMLElement): PresetPaneKind {
@@ -2170,11 +2252,6 @@ async function renameSelectedPreset(kind: PresetPaneKind): Promise<void> {
     if (targetWasRenamed) {
       state.targetName = nextName;
     }
-    if (state.backedUpTargets[oldName]) {
-      state.backedUpTargets[nextName] = state.backedUpTargets[oldName];
-      delete state.backedUpTargets[oldName];
-    }
-
     hydratePresetList();
     state.notice = `已重命名预设：${nextName}`;
     showToast('success', state.notice);
@@ -2336,9 +2413,10 @@ function copySourceById(id: string): void {
 }
 
 async function favoriteEntryById(kind: 'source' | 'target', id: string): Promise<void> {
-  const entry = kind === 'source'
-    ? getSourceEntries().find(item => item.id === id)
-    : getTargetEntries().find(item => item.id === id);
+  const entry =
+    kind === 'source'
+      ? getSourceEntries().find(item => item.id === id)
+      : getTargetEntries().find(item => item.id === id);
 
   if (!entry) {
     state.error = '没有可收藏的条目';
@@ -2346,7 +2424,8 @@ async function favoriteEntryById(kind: 'source' | 'target', id: string): Promise
     return;
   }
 
-  const sourcePreset = kind === 'source' ? getPresetDisplayName(state.sourceName) : getPresetDisplayName(state.targetName);
+  const sourcePreset =
+    kind === 'source' ? getPresetDisplayName(state.sourceName) : getPresetDisplayName(state.targetName);
   state.favorites = [createFavoriteFromEntry(entry, sourcePreset), ...state.favorites];
   await saveFavorites();
   state.notice = `已收藏：${entry.name}`;
@@ -2368,10 +2447,7 @@ async function favoriteSelectedEntries(kind: SelectableEntryKind): Promise<void>
   }
 
   const sourcePreset = getPresetDisplayName(getPresetNameForPane(kind));
-  state.favorites = [
-    ...entries.map(entry => createFavoriteFromEntry(entry, sourcePreset)),
-    ...state.favorites,
-  ];
+  state.favorites = [...entries.map(entry => createFavoriteFromEntry(entry, sourcePreset)), ...state.favorites];
   await saveFavorites();
   state.notice = `已收藏 ${entries.length} 个条目`;
   showToast('success', state.notice);
@@ -2420,13 +2496,21 @@ function removeSource(id: string): void {
   render();
 }
 
-function toggleTarget(id: string): void {
-  const entry = getTargetEntries().find(item => item.id === id);
-  if (!entry || !state.targetDraft) {
+function toggleEntryEnabled(kind: SelectableEntryKind, id: string): void {
+  const draft = kind === 'source' ? getEditableSourceDraft() : state.targetDraft;
+  const entry = getEntriesForKind(kind).find(item => item.id === id);
+  if (!entry || !draft) {
     return;
   }
-  setPromptEnabled(state.targetDraft, id, !entry.enabled);
-  markTargetDirty();
+
+  const nextEnabled = !entry.enabled;
+  setPromptEnabled(draft, id, nextEnabled);
+  if (kind === 'source') {
+    markSourceDirty();
+  } else {
+    markTargetDirty();
+  }
+  state.notice = `已暂存${nextEnabled ? '启用' : '禁用'}：${entry.name}`;
   render();
 }
 
@@ -2595,12 +2679,6 @@ async function saveSourceDraft(): Promise<void> {
     return;
   }
 
-  if (state.sourceOriginal && !state.backedUpTargets[state.sourceName]) {
-    const backupName = `${state.sourceName}.bak-preset-manager-${formatBackupTimestamp(new Date())}`;
-    const savedBackupName = await persistPreset(backupName, state.sourceOriginal, false);
-    state.backedUpTargets[state.sourceName] = savedBackupName;
-  }
-
   const savedName = await persistPreset(state.sourceName, state.sourceDraft, true);
   state.sourceName = savedName;
   state.sourceOriginal = deepClone(state.sourceDraft);
@@ -2617,12 +2695,6 @@ async function saveTargetOnly(): Promise<void> {
     state.targetOriginal = deepClone(state.targetDraft);
     state.targetDirty = false;
     return;
-  }
-
-  if (state.targetOriginal && !state.backedUpTargets[state.targetName]) {
-    const backupName = `${state.targetName}.bak-preset-manager-${formatBackupTimestamp(new Date())}`;
-    const savedBackupName = await persistPreset(backupName, state.targetOriginal, false);
-    state.backedUpTargets[state.targetName] = savedBackupName;
   }
 
   const savedName = await persistPreset(state.targetName, state.targetDraft, true);
@@ -2658,7 +2730,10 @@ async function saveFavoritesFromDraft(draft: Preset): Promise<void> {
 
 async function persistPreset(name: string, preset: Preset, triggerUi: boolean): Promise<string> {
   diagnose('preset-save-start', { name, triggerUi });
-  await helperCreateOrReplacePreset(name, deepClone(preset), { render: triggerUi ? 'immediate' : 'none' });
+  await helperCreateOrReplacePreset(name, deepClone(preset), { render: 'none' });
+  if (triggerUi && name === helperGetLoadedPresetName()) {
+    await helperCreateOrReplacePreset('in_use', deepClone(preset), { render: 'immediate' });
+  }
   diagnose('preset-save-success', { name });
   return name;
 }
@@ -2667,7 +2742,7 @@ async function loadFavorites(): Promise<FavoriteEntry[]> {
   try {
     const raw = localStorage.getItem(`${STORAGE_NAMESPACE}:${FAVORITES_TABLE}:${FAVORITES_KEY}`);
     const parsed = raw ? JSON.parse(raw) : [];
-    const favorites = Array.isArray(parsed) ? parsed as FavoriteEntry[] : [];
+    const favorites = Array.isArray(parsed) ? (parsed as FavoriteEntry[]) : [];
     diagnose('favorites-loaded', { count: favorites.length });
     return favorites;
   } catch (error) {
@@ -2700,7 +2775,6 @@ function diagnose(stage: string, details?: Record<string, unknown>): void {
   } catch {
     // ignored
   }
-
 }
 
 function cleanupLegacyScriptVariables(): void {
@@ -2717,12 +2791,15 @@ function cleanupLegacyScriptVariables(): void {
       return;
     }
     if (typeof runtime.updateVariablesWith === 'function') {
-      runtime.updateVariablesWith(variables => {
-        const nextVariables = { ...variables };
-        delete nextVariables[DEBUG_VARIABLE_KEY];
-        delete nextVariables[VERSION_PREFERENCE_KEY];
-        return nextVariables;
-      }, { type: 'script', script_id: scriptId });
+      runtime.updateVariablesWith(
+        variables => {
+          const nextVariables = { ...variables };
+          delete nextVariables[DEBUG_VARIABLE_KEY];
+          delete nextVariables[VERSION_PREFERENCE_KEY];
+          return nextVariables;
+        },
+        { type: 'script', script_id: scriptId },
+      );
     }
   } catch {
     // ignored
@@ -2922,7 +2999,8 @@ function applyTargetDrop(kind: EntryKind, ids: string[], location: DropLocation)
     }
     const insertedIds = insertEntriesAtIndex(state.targetDraft, sourceEntries, location.index);
     selectDroppedEntries('target', insertedIds);
-    state.notice = sourceEntries.length === 1 ? `已拖入：${sourceEntries[0].name}` : `已拖入 ${sourceEntries.length} 个条目`;
+    state.notice =
+      sourceEntries.length === 1 ? `已拖入：${sourceEntries[0].name}` : `已拖入 ${sourceEntries.length} 个条目`;
   }
 
   if (kind === 'favorite') {
@@ -2932,7 +3010,8 @@ function applyTargetDrop(kind: EntryKind, ids: string[], location: DropLocation)
     }
     const insertedIds = insertEntriesAtIndex(state.targetDraft, favorites, location.index);
     selectDroppedEntries('target', insertedIds);
-    state.notice = favorites.length === 1 ? `已从收藏拖入：${favorites[0].name}` : `已从收藏拖入 ${favorites.length} 个条目`;
+    state.notice =
+      favorites.length === 1 ? `已从收藏拖入：${favorites[0].name}` : `已从收藏拖入 ${favorites.length} 个条目`;
   }
 
   if (kind === 'target') {
@@ -2966,8 +3045,12 @@ function applySourceDrop(kind: EntryKind, ids: string[], location: DropLocation)
     const insertedIds = insertEntriesAtIndex(sourceDraft, targetEntries, location.index);
     selectDroppedEntries('source', insertedIds);
     state.notice = isFavoritesPreset(state.sourceName)
-      ? (targetEntries.length === 1 ? `已拖入收藏夹：${targetEntries[0].name}` : `已拖入收藏夹 ${targetEntries.length} 个条目`)
-      : (targetEntries.length === 1 ? `已拖入来源：${targetEntries[0].name}` : `已拖入来源 ${targetEntries.length} 个条目`);
+      ? targetEntries.length === 1
+        ? `已拖入收藏夹：${targetEntries[0].name}`
+        : `已拖入收藏夹 ${targetEntries.length} 个条目`
+      : targetEntries.length === 1
+        ? `已拖入来源：${targetEntries[0].name}`
+        : `已拖入来源 ${targetEntries.length} 个条目`;
   }
 
   if (kind === 'favorite') {
@@ -2977,7 +3060,8 @@ function applySourceDrop(kind: EntryKind, ids: string[], location: DropLocation)
     }
     const insertedIds = insertEntriesAtIndex(sourceDraft, favorites, location.index);
     selectDroppedEntries('source', insertedIds);
-    state.notice = favorites.length === 1 ? `已从收藏拖入：${favorites[0].name}` : `已从收藏拖入 ${favorites.length} 个条目`;
+    state.notice =
+      favorites.length === 1 ? `已从收藏拖入：${favorites[0].name}` : `已从收藏拖入 ${favorites.length} 个条目`;
   }
 
   markSourceDirty();
@@ -2995,7 +3079,11 @@ function getFavoritesByIds(ids: string[]): FavoriteEntry[] {
   return state.favorites.filter(entry => selectedIds.has(entry.id));
 }
 
-function insertEntriesAtIndex(targetPreset: Preset, entries: Array<PromptEntry | FavoriteEntry>, index: number): string[] {
+function insertEntriesAtIndex(
+  targetPreset: Preset,
+  entries: Array<PromptEntry | FavoriteEntry>,
+  index: number,
+): string[] {
   const insertedIds: string[] = [];
   entries.forEach((entry, offset) => {
     insertedIds.push(insertPromptFromEntry(targetPreset, entry, index + offset));
@@ -3025,8 +3113,10 @@ function selectDroppedEntries(kind: SelectableEntryKind, ids: string[]): void {
 
 function getDropLocation(clientX: number, clientY: number): DropLocation | null {
   const target = getMountDocument().elementFromPoint(clientX, clientY);
-  const row = target?.closest<HTMLElement>('.pm-row[data-entry-kind="source"], .pm-row[data-entry-kind="target"]') ?? null;
-  const list = target?.closest<HTMLElement>('.pm-list[data-drop-zone="source"], .pm-list[data-drop-zone="target"]') ?? null;
+  const row =
+    target?.closest<HTMLElement>('.pm-row[data-entry-kind="source"], .pm-row[data-entry-kind="target"]') ?? null;
+  const list =
+    target?.closest<HTMLElement>('.pm-list[data-drop-zone="source"], .pm-list[data-drop-zone="target"]') ?? null;
   const zone = getDropZone(row, list);
   if (!zone) {
     return null;
@@ -3087,7 +3177,9 @@ function updateDropMarker(clientX: number, clientY: number): void {
 
 function clearDropMarkers(): void {
   getMountDocument()
-    .querySelectorAll<HTMLElement>('#tt-preset-stitcher-root .pm-row-drop-before, #tt-preset-stitcher-root .pm-row-drop-after')
+    .querySelectorAll<HTMLElement>(
+      '#tt-preset-stitcher-root .pm-row-drop-before, #tt-preset-stitcher-root .pm-row-drop-after',
+    )
     .forEach(row => row.classList.remove('pm-row-drop-before', 'pm-row-drop-after'));
 }
 
@@ -3105,11 +3197,6 @@ function showToast(type: 'success' | 'error', message: string): void {
   } else {
     toastr.error(message);
   }
-}
-
-function formatBackupTimestamp(date: Date): string {
-  const pad = (value: number) => String(value).padStart(2, '0');
-  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
 }
 
 function escapeHtml(value: unknown): string {

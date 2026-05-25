@@ -1,4 +1,4 @@
-export const APP_VERSION = 'v1.31';
+export const APP_VERSION = 'v1.32';
 
 export type VersionRelation = 'current' | 'newer' | 'older';
 export type ScriptScope = 'global' | 'preset' | 'character';

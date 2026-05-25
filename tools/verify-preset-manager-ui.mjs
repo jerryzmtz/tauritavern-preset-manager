@@ -59,7 +59,12 @@ const fixturePresets = [
     preset: {
       prompts: [
         { identifier: 'target-style-heading', name: '====夏瑾的文风====', role: 'system', content: '' },
-        { identifier: 'target-default', name: '🖋️默认', role: 'user', content: '{{setvar::writingstyle::writing_style_1}}' },
+        {
+          identifier: 'target-default',
+          name: '🖋️默认',
+          role: 'user',
+          content: '{{setvar::writingstyle::writing_style_1}}',
+        },
       ],
       prompt_order: [
         {
@@ -137,7 +142,11 @@ function serveFixture() {
   <main>中文测试：预设缝合管理器</main>
   <div id="script-buttons"></div>
   <script>
+    window.__clonePreset = value => JSON.parse(JSON.stringify(value));
+    window.__clonePreset = value => JSON.parse(JSON.stringify(value));
     window.__presetFixtureStore = new Map(${JSON.stringify(fixturePresets)}.map(item => [item.name, item.preset]));
+    window.__inUsePreset = window.__clonePreset(window.__presetFixtureStore.get('夏瑾二改（自用）'));
+    window.__inUsePreset = window.__clonePreset(window.__presetFixtureStore.get('夏瑾二改（自用）'));
     window.__makeRuntimePreset = data => {
       const cloned = JSON.parse(JSON.stringify(data));
       const order = cloned.prompt_order?.find(item => item.character_id === 100001)?.order
@@ -188,7 +197,7 @@ function serveFixture() {
         enabled: true,
         name: '预设缝合管理器',
         id: 'preset-manager-script-id',
-        content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v1.31/dist/preset-manager/index.js';",
+        content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v1.32/dist/preset-manager/index.js';",
         info: '',
         button: { enabled: true, buttons: [] },
         data: {},
@@ -201,13 +210,13 @@ function serveFixture() {
     window.fetch = (input, init) => {
       const href = String(input);
       if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/releases/latest') {
-        return Promise.resolve(new Response(JSON.stringify({ tag_name: 'v1.31' }), {
+        return Promise.resolve(new Response(JSON.stringify({ tag_name: 'v1.32' }), {
           status: 200,
           headers: { 'content-type': 'application/json; charset=utf-8' },
         }));
       }
       if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/tags?per_page=20') {
-        return Promise.resolve(new Response(JSON.stringify([{ name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }, { name: 'v0.99' }] ), {
+        return Promise.resolve(new Response(JSON.stringify([{ name: 'v1.32' }, { name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }] ), {
           status: 200,
           headers: { 'content-type': 'application/json; charset=utf-8' },
         }));
@@ -264,7 +273,7 @@ function serveFixture() {
     };
     window.getPresetNames = () => Array.from(window.__presetFixtureStore.keys());
     window.getLoadedPresetName = () => '夏瑾二改（自用）';
-    window.getPreset = name => window.__makeRuntimePreset(window.__presetFixtureStore.get(name));
+    window.getPreset = name => window.__makeRuntimePreset(name === 'in_use' ? window.__inUsePreset : window.__presetFixtureStore.get(name));
     window.getScriptId = () => 'preset-manager-script-id';
     window.getScriptTrees = ({ type }) => window.__versionScriptTrees[type] ?? [];
     window.updateScriptTreesWith = (updater, { type }) => {
@@ -285,7 +294,11 @@ function serveFixture() {
       return window.__scriptVariables;
     };
     window.createOrReplacePreset = async (name, preset, options = {}) => {
-      window.__presetFixtureStore.set(name, JSON.parse(JSON.stringify(preset)));
+      if (name === 'in_use') {
+        window.__inUsePreset = window.__clonePreset(preset);
+      } else {
+        window.__presetFixtureStore.set(name, window.__clonePreset(preset));
+      }
       const response = await fetch('/api/presets/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -406,7 +419,7 @@ function serveFixture() {
           enabled: true,
           name: '预设缝合管理器',
           id: 'zero-frame-script-id',
-          content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v1.31/dist/preset-manager/index.js';",
+          content: "import 'https://cdn.jsdelivr.net/gh/jerryzmtz/tauritavern-preset-manager@v1.32/dist/preset-manager/index.js';",
           info: '',
           button: { enabled: true, buttons: [] },
           data: {},
@@ -419,13 +432,13 @@ function serveFixture() {
       child.fetch = (input, init) => {
         const href = String(input);
         if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/releases/latest') {
-          return Promise.resolve(new child.Response(JSON.stringify({ tag_name: 'v1.31' }), {
+          return Promise.resolve(new child.Response(JSON.stringify({ tag_name: 'v1.32' }), {
             status: 200,
             headers: { 'content-type': 'application/json; charset=utf-8' },
           }));
         }
         if (href === 'https://api.github.com/repos/jerryzmtz/tauritavern-preset-manager/tags?per_page=20') {
-          return Promise.resolve(new child.Response(JSON.stringify([{ name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }, { name: 'v0.99' }] ), {
+          return Promise.resolve(new child.Response(JSON.stringify([{ name: 'v1.32' }, { name: 'v1.31' }, { name: 'v1.30' }, { name: 'v1.19' }] ), {
             status: 200,
             headers: { 'content-type': 'application/json; charset=utf-8' },
           }));
@@ -497,9 +510,13 @@ function serveFixture() {
       };
       child.getPresetNames = () => Array.from(window.__presetFixtureStore.keys());
       child.getLoadedPresetName = () => '夏瑾二改（自用）';
-      child.getPreset = name => makeRuntimePreset(window.__presetFixtureStore.get(name));
+      child.getPreset = name => makeRuntimePreset(name === 'in_use' ? window.__inUsePreset : window.__presetFixtureStore.get(name));
       child.createOrReplacePreset = async (name, preset) => {
-        window.__presetFixtureStore.set(name, JSON.parse(JSON.stringify(preset)));
+        if (name === 'in_use') {
+          window.__inUsePreset = window.__clonePreset(preset);
+        } else {
+          window.__presetFixtureStore.set(name, window.__clonePreset(preset));
+        }
         return true;
       };
       child.deletePreset = async name => window.__presetFixtureStore.delete(name);
@@ -597,11 +614,12 @@ async function dragBetween(page, sourceLocator, targetLocator, placement = 'cent
     throw new Error('拖拽测试无法取得元素位置');
   }
 
-  const targetY = placement === 'after'
-    ? targetBox.y + targetBox.height - 3
-    : placement === 'end'
-      ? targetBox.y + targetBox.height - 12
-      : targetBox.y + targetBox.height / 2;
+  const targetY =
+    placement === 'after'
+      ? targetBox.y + targetBox.height - 3
+      : placement === 'end'
+        ? targetBox.y + targetBox.height - 12
+        : targetBox.y + targetBox.height / 2;
 
   await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
   await page.mouse.down();
@@ -629,7 +647,9 @@ async function verifySelectionKeepsScroll(page, viewportName) {
 
 async function verifyDirectDragAndUnsavedClose(page, fixture, viewportName) {
   const targetTitles = page.locator('.pm-pane-target .pm-row-title');
-  const originalTitles = await targetTitles.evaluateAll(nodes => nodes.slice(0, 3).map(node => node.textContent?.trim()));
+  const originalTitles = await targetTitles.evaluateAll(nodes =>
+    nodes.slice(0, 3).map(node => node.textContent?.trim()),
+  );
   if (originalTitles.length < 3) {
     throw new Error(`${viewportName}: 目标列表条目不足，无法验证拖拽排序`);
   }
@@ -641,7 +661,9 @@ async function verifyDirectDragAndUnsavedClose(page, fixture, viewportName) {
     'after',
   );
 
-  const reorderedTitles = await targetTitles.evaluateAll(nodes => nodes.slice(0, 3).map(node => node.textContent?.trim()));
+  const reorderedTitles = await targetTitles.evaluateAll(nodes =>
+    nodes.slice(0, 3).map(node => node.textContent?.trim()),
+  );
   if (reorderedTitles[1] !== originalTitles[0]) {
     throw new Error(`${viewportName}: 目标预设直接拖拽排序未生效`);
   }
@@ -662,7 +684,9 @@ async function verifyDirectDragAndUnsavedClose(page, fixture, viewportName) {
     window.__scriptButtonEventsEnabled = true;
   });
 
-  const reopenedTitles = await targetTitles.evaluateAll(nodes => nodes.slice(0, 3).map(node => node.textContent?.trim()));
+  const reopenedTitles = await targetTitles.evaluateAll(nodes =>
+    nodes.slice(0, 3).map(node => node.textContent?.trim()),
+  );
   if (reopenedTitles[0] !== originalTitles[0] || reopenedTitles[1] !== originalTitles[1]) {
     throw new Error(`${viewportName}: 未保存排序在关闭后仍残留到目标预设`);
   }
@@ -680,7 +704,10 @@ async function verifyDirectDragAndUnsavedClose(page, fixture, viewportName) {
     page.locator('.pm-pane-target .pm-list'),
     'end',
   );
-  await page.waitForFunction(count => document.querySelectorAll('.pm-pane-target .pm-row').length > count, targetCountBefore);
+  await page.waitForFunction(
+    count => document.querySelectorAll('.pm-pane-target .pm-row').length > count,
+    targetCountBefore,
+  );
   const targetTitleTexts = await targetTitles.evaluateAll(nodes => nodes.map(node => node.textContent?.trim()));
   if (!targetTitleTexts.includes(sourceTitle?.trim())) {
     throw new Error(`${viewportName}: 来源条目无法直接拖入目标预设`);
@@ -703,7 +730,10 @@ async function verifySourceDeleteDraft(page, fixture, viewportName) {
     throw new Error(`${viewportName}: 来源条目的删除按钮不应禁用`);
   }
   await deleteButton.click();
-  await page.waitForFunction(count => document.querySelectorAll('.pm-pane-source .pm-row').length === count - 1, before);
+  await page.waitForFunction(
+    count => document.querySelectorAll('.pm-pane-source .pm-row').length === count - 1,
+    before,
+  );
   if (fixture.getSavedPreset() !== null) {
     throw new Error(`${viewportName}: 来源删除不应在点击保存前调用保存接口`);
   }
@@ -718,7 +748,7 @@ async function verifySourceDetailEditing(page, fixture, viewportName) {
 
   const detailContent = page.locator('textarea[name="detailContent"]');
   const detailRole = page.locator('select[name="detailRole"]');
-  if (await detailContent.getAttribute('readonly') !== null || await detailRole.isDisabled()) {
+  if ((await detailContent.getAttribute('readonly')) !== null || (await detailRole.isDisabled())) {
     throw new Error(`${viewportName}: 来源条目被选中后条目详情仍不可编辑`);
   }
 
@@ -729,7 +759,99 @@ async function verifySourceDetailEditing(page, fixture, viewportName) {
   }
 
   await page.getByRole('button', { name: '放弃修改' }).click();
-  await page.waitForFunction(() => document.querySelector('textarea[name="detailContent"]')?.value !== '来源条目的详情编辑只停留在页面草稿里');
+  await page.waitForFunction(
+    () => document.querySelector('textarea[name="detailContent"]')?.value !== '来源条目的详情编辑只停留在页面草稿里',
+  );
+}
+
+async function verifyEntryToggleDraft(page, fixture, viewportName) {
+  await page.locator('select[name="sourceName"]').selectOption('雪月agent_v1（自改）');
+  await page.locator('select[name="targetName"]').selectOption('夏瑾二改（自用）');
+  fixture.clearSavedPreset();
+
+  const sourceToggle = page.locator('.pm-pane-source .pm-row').first().locator('.pm-row-toggle');
+  if ((await sourceToggle.getAttribute('aria-pressed')) !== 'true') {
+    throw new Error(`${viewportName}: 来源首条开关初始状态应为启用`);
+  }
+  await sourceToggle.click();
+  await page.waitForFunction(
+    () => document.querySelector('.pm-pane-source .pm-row .pm-row-toggle')?.getAttribute('aria-pressed') === 'false',
+  );
+  if (fixture.getSavedPreset() !== null) {
+    throw new Error(`${viewportName}: 来源条目开关不应在点击保存前调用保存接口`);
+  }
+  const dirtyText = await page.locator('.pm-footer-status').innerText();
+  if (!dirtyText.includes('未保存')) {
+    throw new Error(`${viewportName}: 来源条目开关后没有进入未保存状态`);
+  }
+  await page.getByRole('button', { name: '放弃修改' }).click();
+  await page.waitForFunction(
+    () => document.querySelector('.pm-pane-source .pm-row .pm-row-toggle')?.getAttribute('aria-pressed') === 'true',
+  );
+
+  fixture.clearSavedPreset();
+  const targetToggle = page.locator('.pm-pane-target .pm-row').first().locator('.pm-row-toggle');
+  if ((await targetToggle.getAttribute('aria-pressed')) !== 'true') {
+    throw new Error(`${viewportName}: 目标首条开关初始状态应为启用`);
+  }
+  await targetToggle.click();
+  await page.waitForFunction(
+    () => document.querySelector('.pm-pane-target .pm-row .pm-row-toggle')?.getAttribute('aria-pressed') === 'false',
+  );
+  if (fixture.getSavedPreset() !== null) {
+    throw new Error(`${viewportName}: 目标条目开关不应在点击保存前调用保存接口`);
+  }
+  await page.getByRole('button', { name: /保存预设/ }).click();
+  await page.waitForFunction(() =>
+    document.querySelector('.pm-footer-status')?.textContent?.includes('暂无未保存修改'),
+  );
+  const savedDisabled = fixture.getSavedPreset();
+  const disabledPrompt = savedDisabled?.preset?.prompts?.find(prompt => prompt.id === 'target-style-heading');
+  const namedDisabled = await page.evaluate(() =>
+    window.__presetFixtureStore.get('夏瑾二改（自用）')?.prompts?.find(prompt => prompt.id === 'target-style-heading'),
+  );
+  if (
+    !savedDisabled ||
+    savedDisabled.name !== 'in_use' ||
+    disabledPrompt?.enabled !== false ||
+    namedDisabled?.enabled !== false
+  ) {
+    throw new Error(`${viewportName}: 保存后目标条目开关状态没有同时写入命名预设和 in_use`);
+  }
+  await verifyNoPresetManagerBackups(page, viewportName);
+
+  fixture.clearSavedPreset();
+  await targetToggle.click();
+  await page.waitForFunction(
+    () => document.querySelector('.pm-pane-target .pm-row .pm-row-toggle')?.getAttribute('aria-pressed') === 'true',
+  );
+  await page.getByRole('button', { name: /保存预设/ }).click();
+  await page.waitForFunction(() =>
+    document.querySelector('.pm-footer-status')?.textContent?.includes('暂无未保存修改'),
+  );
+  const savedEnabled = fixture.getSavedPreset();
+  const enabledPrompt = savedEnabled?.preset?.prompts?.find(prompt => prompt.id === 'target-style-heading');
+  const namedEnabled = await page.evaluate(() =>
+    window.__presetFixtureStore.get('夏瑾二改（自用）')?.prompts?.find(prompt => prompt.id === 'target-style-heading'),
+  );
+  if (
+    !savedEnabled ||
+    savedEnabled.name !== 'in_use' ||
+    enabledPrompt?.enabled !== true ||
+    namedEnabled?.enabled !== true
+  ) {
+    throw new Error(`${viewportName}: 目标条目开关恢复启用后没有同时保存到命名预设和 in_use`);
+  }
+  await verifyNoPresetManagerBackups(page, viewportName);
+}
+
+async function verifyNoPresetManagerBackups(page, viewportName) {
+  const backupNames = await page.evaluate(() =>
+    Array.from(window.__presetFixtureStore.keys()).filter(name => name.includes('.bak-preset-manager-')),
+  );
+  if (backupNames.length) {
+    throw new Error(`${viewportName}: 保存普通草稿时不应生成备份预设：${backupNames.join(', ')}`);
+  }
 }
 
 async function verifyMultiSelectOperations(page, fixture, viewportName) {
@@ -739,7 +861,9 @@ async function verifyMultiSelectOperations(page, fixture, viewportName) {
 
   const sourceRows = page.locator('.pm-pane-source .pm-row');
   const targetRows = page.locator('.pm-pane-target .pm-row');
-  const selectedSourceTitles = await sourceRows.evaluateAll(nodes => nodes.slice(0, 2).map(node => node.querySelector('.pm-row-title')?.textContent?.trim()));
+  const selectedSourceTitles = await sourceRows.evaluateAll(nodes =>
+    nodes.slice(0, 2).map(node => node.querySelector('.pm-row-title')?.textContent?.trim()),
+  );
   if (selectedSourceTitles.length < 2 || selectedSourceTitles.some(title => !title)) {
     throw new Error(`${viewportName}: 来源列表条目不足，无法验证多选`);
   }
@@ -750,7 +874,7 @@ async function verifyMultiSelectOperations(page, fixture, viewportName) {
   if (sourcePresetActionsBefore !== 3 || sourcePresetActionsAfter !== 3) {
     throw new Error(`${viewportName}: 条目多选操作混入了预设级操作区`);
   }
-  if (await page.locator('.pm-pane-source .pm-entry-selection-toolbar.is-active').count() !== 1) {
+  if ((await page.locator('.pm-pane-source .pm-entry-selection-toolbar.is-active').count()) !== 1) {
     throw new Error(`${viewportName}: 条目多选没有使用独立工具条`);
   }
 
@@ -759,32 +883,45 @@ async function verifyMultiSelectOperations(page, fixture, viewportName) {
   if (await page.locator('.pm-pane-source .pm-selection-count').count()) {
     throw new Error(`${viewportName}: 多选工具条不应显示已选条数`);
   }
-  const toolbarLabels = await page.locator('.pm-pane-source .pm-selection-action').evaluateAll(nodes => nodes.map(node => node.textContent?.trim()));
-  if (!toolbarLabels.includes('收藏') || !toolbarLabels.includes('删除') || toolbarLabels.some(label => label?.includes('选中'))) {
+  const toolbarLabels = await page
+    .locator('.pm-pane-source .pm-selection-action')
+    .evaluateAll(nodes => nodes.map(node => node.textContent?.trim()));
+  if (
+    !toolbarLabels.includes('收藏') ||
+    !toolbarLabels.includes('删除') ||
+    toolbarLabels.some(label => label?.includes('选中'))
+  ) {
     throw new Error(`${viewportName}: 批量收藏和删除按钮文案应保持精简`);
   }
 
-  const favoritesBefore = await page.evaluate(() => JSON.parse(localStorage.getItem('preset-manager:favorites:v1') ?? '[]').length);
+  const favoritesBefore = await page.evaluate(
+    () => JSON.parse(localStorage.getItem('preset-manager:favorites:v1') ?? '[]').length,
+  );
   await page.locator('.pm-pane-source [data-action="entry-batch-favorite"]').click();
-  await page.waitForFunction(count => JSON.parse(localStorage.getItem('preset-manager:favorites:v1') ?? '[]').length === count + 2, favoritesBefore);
+  await page.waitForFunction(
+    count => JSON.parse(localStorage.getItem('preset-manager:favorites:v1') ?? '[]').length === count + 2,
+    favoritesBefore,
+  );
   if (fixture.getSavedPreset() !== null) {
     throw new Error(`${viewportName}: 批量收藏不应调用预设保存接口`);
   }
 
   const targetCountBeforeDrag = await targetRows.count();
-  await dragBetween(
-    page,
-    sourceRows.first().locator('.pm-row-grip'),
-    page.locator('.pm-pane-target .pm-list'),
-    'end',
+  await dragBetween(page, sourceRows.first().locator('.pm-row-grip'), page.locator('.pm-pane-target .pm-list'), 'end');
+  await page.waitForFunction(
+    count => document.querySelectorAll('.pm-pane-target .pm-row').length === count + 2,
+    targetCountBeforeDrag,
   );
-  await page.waitForFunction(count => document.querySelectorAll('.pm-pane-target .pm-row').length === count + 2, targetCountBeforeDrag);
-  const targetTitlesAfterDrag = await page.locator('.pm-pane-target .pm-row-title').evaluateAll(nodes => nodes.map(node => node.textContent?.trim()));
+  const targetTitlesAfterDrag = await page
+    .locator('.pm-pane-target .pm-row-title')
+    .evaluateAll(nodes => nodes.map(node => node.textContent?.trim()));
   const insertedAt = targetTitlesAfterDrag.findIndex(title => title === selectedSourceTitles[0]);
   if (insertedAt < 0 || targetTitlesAfterDrag[insertedAt + 1] !== selectedSourceTitles[1]) {
     throw new Error(`${viewportName}: 多选拖拽没有按来源顺序插入目标预设`);
   }
-  const targetSelectedTitlesAfterDrag = await page.locator('.pm-pane-target .pm-row.is-multi-selected .pm-row-title').evaluateAll(nodes => nodes.map(node => node.textContent?.trim()));
+  const targetSelectedTitlesAfterDrag = await page
+    .locator('.pm-pane-target .pm-row.is-multi-selected .pm-row-title')
+    .evaluateAll(nodes => nodes.map(node => node.textContent?.trim()));
   for (const title of selectedSourceTitles) {
     if (!targetSelectedTitlesAfterDrag.includes(title)) {
       throw new Error(`${viewportName}: 多选拖拽后目标预设没有高亮整组选中条目`);
@@ -795,22 +932,31 @@ async function verifyMultiSelectOperations(page, fixture, viewportName) {
   }
 
   await page.getByRole('button', { name: '放弃修改' }).click();
-  await page.waitForFunction(count => document.querySelectorAll('.pm-pane-target .pm-row').length === count, targetCountBeforeDrag);
+  await page.waitForFunction(
+    count => document.querySelectorAll('.pm-pane-target .pm-row').length === count,
+    targetCountBeforeDrag,
+  );
 
-  if (await page.locator('.pm-pane-target .pm-row-select').count() === 0) {
+  if ((await page.locator('.pm-pane-target .pm-row-select').count()) === 0) {
     await page.locator('.pm-pane-target [data-action="entry-multi-toggle"]').click();
   }
   const targetCountBeforeDelete = await targetRows.count();
   await targetRows.nth(0).locator('.pm-row-select').click();
   await targetRows.nth(1).locator('.pm-row-select').click();
   await page.locator('.pm-pane-target [data-action="entry-batch-delete"]').click();
-  await page.waitForFunction(count => document.querySelectorAll('.pm-pane-target .pm-row').length === count - 2, targetCountBeforeDelete);
+  await page.waitForFunction(
+    count => document.querySelectorAll('.pm-pane-target .pm-row').length === count - 2,
+    targetCountBeforeDelete,
+  );
   if (fixture.getSavedPreset() !== null) {
     throw new Error(`${viewportName}: 批量删除不应在点击保存前调用保存接口`);
   }
 
   await page.getByRole('button', { name: '放弃修改' }).click();
-  await page.waitForFunction(count => document.querySelectorAll('.pm-pane-target .pm-row').length === count, targetCountBeforeDelete);
+  await page.waitForFunction(
+    count => document.querySelectorAll('.pm-pane-target .pm-row').length === count,
+    targetCountBeforeDelete,
+  );
 }
 
 async function verifyPresetActions(page, fixture, viewportName) {
@@ -825,10 +971,7 @@ async function verifyPresetActions(page, fixture, viewportName) {
     void dialog.accept(copyName);
   });
   await page.locator('.pm-pane-source [data-action="preset-copy"]').click();
-  await page.waitForFunction(
-    name => document.querySelector('select[name="sourceName"]')?.value === name,
-    copyName,
-  );
+  await page.waitForFunction(name => document.querySelector('select[name="sourceName"]')?.value === name, copyName);
   const savedCopy = fixture.getSavedPreset();
   if (!savedCopy || savedCopy.name !== copyName) {
     throw new Error(`${viewportName}: 复制预设没有调用保存接口创建新预设`);
@@ -843,10 +986,7 @@ async function verifyPresetActions(page, fixture, viewportName) {
     void dialog.accept(renamedName);
   });
   await page.locator('.pm-pane-source [data-action="preset-rename"]').click();
-  await page.waitForFunction(
-    name => document.querySelector('select[name="sourceName"]')?.value === name,
-    renamedName,
-  );
+  await page.waitForFunction(name => document.querySelector('select[name="sourceName"]')?.value === name, renamedName);
   if (fixture.getSavedPreset() !== null) {
     throw new Error(`${viewportName}: 重命名预设不应调用内容保存接口`);
   }
@@ -859,7 +999,8 @@ async function verifyPresetActions(page, fixture, viewportName) {
   });
   await page.locator('.pm-pane-source [data-action="preset-delete"]').click();
   await page.waitForFunction(
-    name => ![...document.querySelector('select[name="sourceName"]')?.options ?? []].some(option => option.value === name),
+    name =>
+      ![...(document.querySelector('select[name="sourceName"]')?.options ?? [])].some(option => option.value === name),
     renamedName,
   );
   if (fixture.getSavedPreset() !== null) {
@@ -885,9 +1026,18 @@ async function verifyFavoritesTargetDrag(page, fixture, viewportName) {
   );
   await page.waitForFunction(() => document.querySelectorAll('.pm-pane-source .pm-row').length > 1);
 
-  const sourceTitlesBefore = await page.locator('.pm-pane-source .pm-row-title').evaluateAll(nodes => nodes.slice(0, 2).map(node => node.textContent?.trim()));
-  await dragBetween(page, page.locator('.pm-pane-source .pm-row').first().locator('.pm-row-grip'), page.locator('.pm-pane-source .pm-row').nth(1), 'after');
-  const sourceTitlesAfter = await page.locator('.pm-pane-source .pm-row-title').evaluateAll(nodes => nodes.slice(0, 2).map(node => node.textContent?.trim()));
+  const sourceTitlesBefore = await page
+    .locator('.pm-pane-source .pm-row-title')
+    .evaluateAll(nodes => nodes.slice(0, 2).map(node => node.textContent?.trim()));
+  await dragBetween(
+    page,
+    page.locator('.pm-pane-source .pm-row').first().locator('.pm-row-grip'),
+    page.locator('.pm-pane-source .pm-row').nth(1),
+    'after',
+  );
+  const sourceTitlesAfter = await page
+    .locator('.pm-pane-source .pm-row-title')
+    .evaluateAll(nodes => nodes.slice(0, 2).map(node => node.textContent?.trim()));
   if (sourceTitlesAfter[1] !== sourceTitlesBefore[0]) {
     throw new Error(`${viewportName}: 收藏夹来源状态下拖拽排序未生效`);
   }
@@ -901,24 +1051,18 @@ async function verifyFavoritesTargetDrag(page, fixture, viewportName) {
 
   const targetRows = page.locator('.pm-pane-target .pm-row');
   const sourceRows = page.locator('.pm-pane-source .pm-row');
-  await dragBetween(
-    page,
-    sourceRows.first().locator('.pm-row-grip'),
-    page.locator('.pm-pane-target .pm-list'),
-    'end',
-  );
+  await dragBetween(page, sourceRows.first().locator('.pm-row-grip'), page.locator('.pm-pane-target .pm-list'), 'end');
   await page.waitForFunction(() => document.querySelectorAll('.pm-pane-target .pm-row').length > 0);
-  await dragBetween(
-    page,
-    sourceRows.nth(1).locator('.pm-row-grip'),
-    page.locator('.pm-pane-target .pm-list'),
-    'end',
-  );
+  await dragBetween(page, sourceRows.nth(1).locator('.pm-row-grip'), page.locator('.pm-pane-target .pm-list'), 'end');
   await page.waitForFunction(() => document.querySelectorAll('.pm-pane-target .pm-row').length > 1);
 
-  const titlesBefore = await page.locator('.pm-pane-target .pm-row-title').evaluateAll(nodes => nodes.slice(0, 2).map(node => node.textContent?.trim()));
+  const titlesBefore = await page
+    .locator('.pm-pane-target .pm-row-title')
+    .evaluateAll(nodes => nodes.slice(0, 2).map(node => node.textContent?.trim()));
   await dragBetween(page, targetRows.first().locator('.pm-row-grip'), targetRows.nth(1), 'after');
-  const titlesAfter = await page.locator('.pm-pane-target .pm-row-title').evaluateAll(nodes => nodes.slice(0, 2).map(node => node.textContent?.trim()));
+  const titlesAfter = await page
+    .locator('.pm-pane-target .pm-row-title')
+    .evaluateAll(nodes => nodes.slice(0, 2).map(node => node.textContent?.trim()));
   if (titlesAfter[1] !== titlesBefore[0]) {
     throw new Error(`${viewportName}: 收藏夹目标状态下拖拽排序未生效`);
   }
@@ -952,12 +1096,19 @@ async function verifyZeroSizedIframeParentMount(browser, fixture) {
       childHeight: frame.contentWindow.innerHeight,
     };
   });
-  if (frameMetrics.frameWidth !== 0 || frameMetrics.frameHeight !== 0 || frameMetrics.childWidth !== 0 || frameMetrics.childHeight !== 0) {
+  if (
+    frameMetrics.frameWidth !== 0 ||
+    frameMetrics.frameHeight !== 0 ||
+    frameMetrics.childWidth !== 0 ||
+    frameMetrics.childHeight !== 0
+  ) {
     throw new Error('zero-frame: 测试夹具没有形成 0x0 脚本 iframe');
   }
 
   await page.getByRole('button', { name: /^预设缝合$/ }).click();
-  await page.locator('body > #tt-preset-stitcher-host #tt-preset-stitcher-root .pm-panel').waitFor({ state: 'visible' });
+  await page
+    .locator('body > #tt-preset-stitcher-host #tt-preset-stitcher-root .pm-panel')
+    .waitFor({ state: 'visible' });
 
   const mountInfo = await page.evaluate(() => {
     const frame = document.getElementById('script-frame');
@@ -966,10 +1117,12 @@ async function verifyZeroSizedIframeParentMount(browser, fixture) {
     return {
       inParent: Boolean(panel),
       inChild: Boolean(childDocument.querySelector('#tt-preset-stitcher-root')),
-      panelBox: panel ? {
-        width: Math.round(panel.getBoundingClientRect().width),
-        height: Math.round(panel.getBoundingClientRect().height),
-      } : null,
+      panelBox: panel
+        ? {
+            width: Math.round(panel.getBoundingClientRect().width),
+            height: Math.round(panel.getBoundingClientRect().height),
+          }
+        : null,
       debugLog: JSON.parse(frame.contentWindow.localStorage.getItem('preset-manager:debug:v1') ?? '[]'),
     };
   });
@@ -987,8 +1140,8 @@ async function verifyZeroSizedIframeParentMount(browser, fixture) {
 
 const { chromium } = await importPlaywright();
 const fixture = await serveFixture();
-const executablePath = process.env.PRESET_MANAGER_CHROME
-  ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const executablePath =
+  process.env.PRESET_MANAGER_CHROME ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const browser = await chromium.launch({ headless: true, executablePath });
 
 try {
@@ -1015,7 +1168,7 @@ try {
       throw new Error(`${viewport.name}: 出现了应移除的旧文案`);
     }
     const versionText = await page.locator('.pm-version-chip').textContent();
-    if (versionText?.trim() !== 'v1.31') {
+    if (versionText?.trim() !== 'v1.32') {
       throw new Error(`${viewport.name}: 标题旁没有显示当前版本号`);
     }
 
@@ -1027,7 +1180,13 @@ try {
     const saveButton = page.getByRole('button', { name: /保存预设/ });
     await saveButton.scrollIntoViewIfNeeded();
     const saveBox = await saveButton.boundingBox();
-    if (!saveBox || saveBox.x < 0 || saveBox.y < 0 || saveBox.x + saveBox.width > viewport.width + 1 || saveBox.y + saveBox.height > viewport.height + 1) {
+    if (
+      !saveBox ||
+      saveBox.x < 0 ||
+      saveBox.y < 0 ||
+      saveBox.x + saveBox.width > viewport.width + 1 ||
+      saveBox.y + saveBox.height > viewport.height + 1
+    ) {
       throw new Error(`${viewport.name}: 保存按钮不可达`);
     }
     const isTabbedLayout = viewport.width <= 900;
@@ -1038,7 +1197,7 @@ try {
     if (viewport.name === 'desktop-wide') {
       await page.locator('.pm-version-button').click();
       await page.locator('.pm-version-box').waitFor({ state: 'visible' });
-      await page.waitForFunction(() => document.body.innerText.includes('v1.31'));
+      await page.waitForFunction(() => document.body.innerText.includes('v1.32'));
       if (await page.locator('.pm-version-row[data-version="v0.99"]').count()) {
         throw new Error(`${viewport.name}: 版本列表不应显示 v1.0.0 以前的版本`);
       }
@@ -1051,8 +1210,16 @@ try {
       await page.locator('.pm-version-box').waitFor({ state: 'detached' });
     }
     await page.locator('select[name="sourceName"]').selectOption('雪月agent_v1（自改）');
-    const firstSourceActionCount = await page.locator('.pm-pane-source .pm-row').first().locator('.pm-row-action').count();
-    const firstTargetActionCount = await page.locator('.pm-pane-target .pm-row').first().locator('.pm-row-action').count();
+    const firstSourceActionCount = await page
+      .locator('.pm-pane-source .pm-row')
+      .first()
+      .locator('.pm-row-action')
+      .count();
+    const firstTargetActionCount = await page
+      .locator('.pm-pane-target .pm-row')
+      .first()
+      .locator('.pm-row-action')
+      .count();
     if (firstSourceActionCount < 2 || firstTargetActionCount < 2) {
       throw new Error(`${viewport.name}: 条目行没有保留收藏和删除按钮`);
     }
@@ -1067,12 +1234,14 @@ try {
     const composingState = await sourceSearch.evaluate(element => {
       element.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }));
       element.value = 't';
-      element.dispatchEvent(new InputEvent('input', {
-        bubbles: true,
-        data: 't',
-        inputType: 'insertCompositionText',
-        isComposing: true,
-      }));
+      element.dispatchEvent(
+        new InputEvent('input', {
+          bubbles: true,
+          data: 't',
+          inputType: 'insertCompositionText',
+          isComposing: true,
+        }),
+      );
       return {
         active: document.activeElement === element,
         connected: element.isConnected,
@@ -1095,6 +1264,7 @@ try {
 
     if (viewport.name === 'desktop-wide') {
       await verifySourceDetailEditing(page, fixture, viewport.name);
+      await verifyEntryToggleDraft(page, fixture, viewport.name);
       await verifyPresetActions(page, fixture, viewport.name);
       await verifySourceDeleteDraft(page, fixture, viewport.name);
       await verifyMultiSelectOperations(page, fixture, viewport.name);
@@ -1115,8 +1285,10 @@ try {
         'end',
       );
       await page.waitForFunction(
-        title => [...document.querySelectorAll('.pm-pane-target .pm-row-title')]
-          .some(node => node.textContent?.trim() === title),
+        title =>
+          [...document.querySelectorAll('.pm-pane-target .pm-row-title')].some(
+            node => node.textContent?.trim() === title,
+          ),
         sourceTitle?.trim(),
       );
     }
@@ -1132,7 +1304,9 @@ try {
     if (isTabbedLayout) {
       await page.getByRole('button', { name: '目标', exact: true }).click();
     }
-    const accentColor = await page.locator('.pm-pane-target .pm-row.is-selected').evaluate(element => getComputedStyle(element).borderColor);
+    const accentColor = await page
+      .locator('.pm-pane-target .pm-row.is-selected')
+      .evaluate(element => getComputedStyle(element).borderColor);
     if (!accentColor || accentColor === 'rgba(0, 0, 0, 0)') {
       throw new Error(`${viewport.name}: 主题色未应用到选中状态`);
     }
