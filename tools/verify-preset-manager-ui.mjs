@@ -657,6 +657,28 @@ async function verifyDirectDragAndUnsavedClose(page, fixture, viewportName) {
   if (fixture.getSavedPreset() !== null) {
     throw new Error(`${viewportName}: 拖拽目标预设操作不应触发保存接口`);
   }
+
+  const reverseDragTitle = '仅目标条目';
+  const sourceCountBeforeReverseDrag = await page.locator('.pm-pane-source .pm-row').count();
+  await dragBetween(
+    page,
+    rowByTitle(page, '.pm-pane-target', reverseDragTitle).first().locator('.pm-row-grip'),
+    page.locator('.pm-pane-source .pm-list'),
+    'end',
+  );
+  await page.waitForFunction(
+    count => document.querySelectorAll('.pm-pane-source .pm-row').length > count,
+    sourceCountBeforeReverseDrag,
+  );
+  const sourceTitleTexts = await page
+    .locator('.pm-pane-source .pm-row-title')
+    .evaluateAll(nodes => nodes.map(node => node.textContent?.trim()));
+  if (!sourceTitleTexts.includes(reverseDragTitle)) {
+    throw new Error(`${viewportName}: 目标条目无法直接拖入来源预设`);
+  }
+  if (fixture.getSavedPreset() !== null) {
+    throw new Error(`${viewportName}: 拖拽来源预设操作不应触发保存接口`);
+  }
 }
 
 async function verifySourceDeleteDraft(page, fixture, viewportName) {
@@ -1533,7 +1555,7 @@ try {
       throw new Error(`${viewport.name}: 顶部刷新按钮应该已删除`);
     }
     const versionText = await page.locator('.pm-version-chip').textContent();
-    if (versionText?.trim() !== 'v2.21') {
+    if (versionText?.trim() !== 'v2.22') {
       throw new Error(`${viewport.name}: 标题旁没有显示当前版本号`);
     }
 

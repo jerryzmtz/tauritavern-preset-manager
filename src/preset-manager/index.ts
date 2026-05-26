@@ -3731,7 +3731,7 @@ function onDragOver(event: DragEvent): void {
   }
 
   const target = toElement(event.target);
-  if (target?.closest('[data-drop-zone], .pm-row[data-entry-kind="target"]')) {
+  if (isPresetEntryDropTarget(target)) {
     event.preventDefault();
     updateDropMarker(event.clientX, event.clientY);
   }
@@ -3745,7 +3745,7 @@ function onDrop(event: DragEvent): void {
   }
 
   const raw = event.dataTransfer?.getData('application/x-preset-manager');
-  if (!raw || !state.targetDraft) {
+  if (!raw) {
     return;
   }
 
@@ -3755,6 +3755,14 @@ function onDrop(event: DragEvent): void {
   }
 
   applyDrop(payload.kind, normalizeDragIds(payload), event.clientX, event.clientY);
+}
+
+function isPresetEntryDropTarget(target: Element | null): boolean {
+  return Boolean(
+    target?.closest(
+      '.pm-list[data-drop-zone="source"], .pm-list[data-drop-zone="target"], .pm-row[data-entry-kind="source"], .pm-row[data-entry-kind="target"]',
+    ),
+  );
 }
 
 function onPointerDown(event: PointerEvent): void {
