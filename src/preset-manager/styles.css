@@ -419,6 +419,11 @@
   min-width: 0;
 }
 
+.pm-input-wrap {
+  position: relative;
+  min-width: 0;
+}
+
 .pm-field input,
 .pm-field select,
 .pm-detail-pane textarea,
@@ -437,6 +442,38 @@
 .pm-role-field select {
   height: 34px;
   padding: 0 9px;
+}
+
+.pm-input-wrap input {
+  padding-inline-end: 31px;
+}
+
+.pm-clear-search {
+  position: absolute;
+  inset-inline-end: 3px;
+  inset-block-start: 50%;
+  inline-size: 28px;
+  block-size: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--pm-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: calc(var(--pm-radius) - 2px);
+  transform: translateY(-50%);
+}
+
+.pm-clear-search:hover:not(:disabled),
+.pm-clear-search:focus-visible {
+  color: var(--pm-text);
+  border-color: var(--pm-border-soft);
+  background: color-mix(in srgb, var(--pm-surface-soft) 86%, transparent);
+}
+
+.pm-clear-search:disabled {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .pm-field input:focus,
@@ -471,7 +508,7 @@
 .pm-row {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) 30px auto;
+  grid-template-columns: 20px minmax(0, 1fr) 28px auto;
   align-items: center;
   gap: 7px;
   min-height: 46px;
@@ -482,18 +519,18 @@
 }
 
 .pm-row.has-multi-select {
-  grid-template-columns: 20px 18px minmax(0, 1fr) 30px auto;
+  grid-template-columns: 20px 18px minmax(0, 1fr) 28px auto;
 }
 
 .pm-row-actions {
-  gap: 6px;
+  gap: 5px;
 }
 
 .pm-row-action,
 .pm-row-toggle,
 .pm-row-select {
-  inline-size: 30px;
-  block-size: 30px;
+  inline-size: 28px;
+  block-size: 28px;
   font-size: 0.84rem;
 }
 

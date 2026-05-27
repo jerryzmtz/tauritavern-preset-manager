@@ -9,7 +9,7 @@ process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({
 });
 require('ts-node/register/transpile-only');
 
-const { comparePromptEntries } = require('./core.ts');
+const { comparePromptEntries, listPromptEntries, setPromptName } = require('./core.ts');
 
 test('splits same-identifier entries when content has no shared bigram', () => {
   const result = comparePromptEntries(
@@ -79,6 +79,20 @@ test('handles empty content confidence explicitly', () => {
   assert.equal(oneEmpty.summary.targetOnly, 1);
   assert.equal(bothEmpty.summary.same, 1);
   assert.equal(bothEmpty.sourceById.get('shared-id').status, 'matched');
+});
+
+test('renames a prompt while preserving its identifier and content', () => {
+  const preset = {
+    prompts: [{ identifier: 'entry-id', name: '旧名称', content: '保持原正文', role: 'system' }],
+    prompt_order: [{ character_id: 100001, order: [{ identifier: 'entry-id', enabled: true }] }],
+  };
+
+  setPromptName(preset, 'entry-id', '新名称');
+
+  const [renamed] = listPromptEntries(preset);
+  assert.equal(renamed.id, 'entry-id');
+  assert.equal(renamed.name, '新名称');
+  assert.equal(renamed.content, '保持原正文');
 });
 
 function entry(overrides) {

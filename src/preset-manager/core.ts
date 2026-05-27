@@ -495,6 +495,13 @@ export function setPromptContent(targetPreset: Preset, identifier: string, conte
   }
 }
 
+export function setPromptName(targetPreset: Preset, identifier: string, name: string): void {
+  const prompt = findPrompt(targetPreset, identifier);
+  if (prompt) {
+    prompt.name = name;
+  }
+}
+
 export function setPromptRole(targetPreset: Preset, identifier: string, role: string): void {
   const prompt = findPrompt(targetPreset, identifier);
   if (prompt) {

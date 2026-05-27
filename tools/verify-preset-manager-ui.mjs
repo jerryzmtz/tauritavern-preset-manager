@@ -1555,7 +1555,7 @@ try {
       throw new Error(`${viewport.name}: 顶部刷新按钮应该已删除`);
     }
     const versionText = await page.locator('.pm-version-chip').textContent();
-    if (versionText?.trim() !== 'v2.22') {
+    if (versionText?.trim() !== 'v2.23') {
       throw new Error(`${viewport.name}: 标题旁没有显示当前版本号`);
     }
 

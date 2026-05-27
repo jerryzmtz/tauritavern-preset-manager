@@ -35,6 +35,7 @@ import {
   removePrompt,
   setPromptContent,
   setPromptEnabled,
+  setPromptName,
   setPromptRole,
   validatePreset,
 } from './core';
@@ -1333,7 +1334,12 @@ function renderPresetPane(
         </label>
         <label class="pm-field">
           <span>搜索</span>
-          <input name="${queryName}" value="${escapeAttr(query)}" placeholder="名称或正文" autocomplete="off" />
+          <div class="pm-input-wrap">
+            <input name="${queryName}" value="${escapeAttr(query)}" placeholder="名称或正文" autocomplete="off" />
+            <button class="pm-clear-search" type="button" data-action="clear-query" data-query-name="${queryName}" title="清空搜索" aria-label="清空搜索" ${query ? '' : 'disabled'}>
+              <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+            </button>
+          </div>
         </label>
         <label class="pm-field">
           <span>过滤</span>
@@ -1629,13 +1635,22 @@ function renderRowActions(kind: 'source' | 'target', entry: PromptEntry): string
   const isFavoritesRow = kind === 'source' ? isFavoritesPreset(state.sourceName) : isFavoritesPreset(state.targetName);
   const favoriteAction = kind === 'source' ? 'favorite-source' : 'favorite-target';
   const deleteAction = kind === 'target' ? 'target-remove' : 'source-remove';
+  const editDisabled = state.compareMode ? 'disabled' : '';
   const favoriteDisabled = isFavoritesRow || state.compareMode ? 'disabled' : '';
   const deleteDisabled = state.compareMode ? 'disabled' : '';
+  const renameTitle = state.compareMode ? '比对模式下不可重命名' : '重命名条目';
+  const duplicateTitle = state.compareMode ? '比对模式下不可 duplicate' : 'Duplicate 条目';
   const favoriteTitle = state.compareMode ? '比对模式下不可收藏' : isFavoritesRow ? '已在收藏夹' : '收藏条目';
   const deleteTitle = state.compareMode ? '比对模式下不可删除' : '删除条目';
   const favoriteIcon = isFavoritesRow ? 'fa-solid' : 'fa-regular';
 
   return `
+    <button class="pm-row-action" type="button" data-action="entry-rename" data-entry-kind="${kind}" data-id="${escapeAttr(entry.id)}" title="${renameTitle}" aria-label="${renameTitle}" ${editDisabled}>
+      <i class="fa-solid fa-pen-to-square" aria-hidden="true"></i>
+    </button>
+    <button class="pm-row-action" type="button" data-action="entry-duplicate" data-entry-kind="${kind}" data-id="${escapeAttr(entry.id)}" title="${duplicateTitle}" aria-label="${duplicateTitle}" ${editDisabled}>
+      <i class="fa-solid fa-clone" aria-hidden="true"></i>
+    </button>
     <button class="pm-row-action" type="button" data-action="${favoriteAction}" data-id="${escapeAttr(entry.id)}" title="${favoriteTitle}" aria-label="${favoriteTitle}" ${favoriteDisabled}>
       <i class="${favoriteIcon} fa-star" aria-hidden="true"></i>
     </button>
@@ -2659,6 +2674,15 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
     case 'entry-toggle-enabled':
       toggleEntryEnabled(getEntryKindFromAction(element), element.dataset.id ?? '');
       return;
+    case 'entry-rename':
+      renameEntry(getEntryKindFromAction(element), element.dataset.id ?? '');
+      return;
+    case 'entry-duplicate':
+      duplicateEntry(getEntryKindFromAction(element), element.dataset.id ?? '');
+      return;
+    case 'clear-query':
+      clearQuery(element.dataset.queryName ?? '');
+      return;
     case 'source-remove':
       removeSource(element.dataset.id ?? '');
       return;
@@ -2720,6 +2744,8 @@ function isCompareReadOnlyBlockedAction(action: string): boolean {
     'entry-clear-selection',
     'entry-batch-favorite',
     'entry-batch-delete',
+    'entry-rename',
+    'entry-duplicate',
     'source-remove',
     'copy-source',
     'copy-selected',
@@ -3328,6 +3354,19 @@ function removeSource(id: string): void {
   render();
 }
 
+function clearQuery(name: string): void {
+  if (name === 'sourceQuery') {
+    state.sourceQuery = '';
+  } else if (name === 'targetQuery') {
+    state.targetQuery = '';
+  } else if (name === 'favoriteQuery') {
+    state.favoriteQuery = '';
+  } else {
+    return;
+  }
+  render();
+}
+
 function toggleEntryEnabled(kind: SelectableEntryKind, id: string): void {
   const draft = kind === 'source' ? getEditableSourceDraft() : state.targetDraft;
   const entry = getEntriesForKind(kind).find(item => item.id === id);
@@ -3344,6 +3383,94 @@ function toggleEntryEnabled(kind: SelectableEntryKind, id: string): void {
   }
   state.notice = `已暂存${nextEnabled ? '启用' : '禁用'}：${entry.name}`;
   render();
+}
+
+function renameEntry(kind: SelectableEntryKind, id: string): void {
+  const draft = kind === 'source' ? getEditableSourceDraft() : state.targetDraft;
+  const entry = getEntriesForKind(kind).find(item => item.id === id);
+  if (!entry || !draft) {
+    state.error = '没有可重命名的条目';
+    render();
+    return;
+  }
+
+  const nextName = promptEntryName('重命名条目为', entry.name);
+  if (!nextName || nextName === entry.name) {
+    return;
+  }
+
+  setPromptName(draft, id, nextName);
+  selectEntryById(kind, id);
+  if (kind === 'source') {
+    markSourceDirty();
+  } else {
+    markTargetDirty();
+  }
+  state.notice = `已重命名条目：${nextName}`;
+  render();
+}
+
+function duplicateEntry(kind: SelectableEntryKind, id: string): void {
+  const draft = kind === 'source' ? getEditableSourceDraft() : state.targetDraft;
+  const entries = getEntriesForKind(kind);
+  const entry = entries.find(item => item.id === id);
+  if (!entry || !draft) {
+    state.error = '没有可 duplicate 的条目';
+    render();
+    return;
+  }
+
+  const nextName = getAvailableEntryName(draft, `${entry.name} 副本`);
+  const duplicate = {
+    ...entry,
+    name: nextName,
+    prompt: {
+      ...deepClone(entry.prompt),
+      name: nextName,
+    },
+  };
+  const insertIndex = entries.findIndex(item => item.id === id) + 1;
+  const duplicatedId = insertPromptFromEntry(draft, duplicate, insertIndex);
+  selectEntryById(kind, duplicatedId);
+  if (kind === 'source') {
+    markSourceDirty();
+  } else {
+    markTargetDirty();
+  }
+  state.notice = `已 duplicate：${nextName}`;
+  render();
+}
+
+function promptEntryName(title: string, defaultName: string): string | null {
+  const value = window.prompt(title, defaultName);
+  if (value === null) {
+    return null;
+  }
+
+  const name = value.trim();
+  if (!name) {
+    state.error = '条目名称不能为空';
+    showToast('error', state.error);
+    render();
+    return null;
+  }
+  return name;
+}
+
+function getAvailableEntryName(draft: Preset, baseName: string): string {
+  const base = baseName.trim() || '未命名条目 副本';
+  const usedNames = new Set(listPromptEntries(draft).map(entry => entry.name));
+  if (!usedNames.has(base)) {
+    return base;
+  }
+
+  let index = 2;
+  let nextName = `${base} ${index}`;
+  while (usedNames.has(nextName)) {
+    index += 1;
+    nextName = `${base} ${index}`;
+  }
+  return nextName;
 }
 
 function moveTarget(id: string, direction: -1 | 1): void {
