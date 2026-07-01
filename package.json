@@ -47,7 +47,10 @@
     "html-webpack-plugin": "^5.6.7",
     "javascript-obfuscator": "^4.2.2",
     "mini-css-extract-plugin": "^2.10.2",
+<<<<<<< HEAD
     "playwright-core": "^1.61.1",
+=======
+>>>>>>> 92bc9ed4a5ff1e65a494b9644780983031cdb1df
     "postcss": "^8.5.16",
     "postcss-cli": "^11.0.1",
     "postcss-load-config": "^6.0.1",
